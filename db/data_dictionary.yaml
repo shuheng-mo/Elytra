@@ -1,0 +1,755 @@
+tables:
+  # ==========================================================
+  # ODS Layer (原始数据层)
+  # ==========================================================
+  - name: ods_users
+    layer: ODS
+    chinese_name: 原始用户表
+    description: 用户注册信息原始数据，包含基本信息、地域、等级
+    update_frequency: daily
+    row_count_approx: 1000
+    columns:
+      - name: user_id
+        type: BIGINT
+        chinese_name: 用户ID
+        description: 唯一用户标识
+        is_primary_key: true
+      - name: username
+        type: VARCHAR(50)
+        chinese_name: 用户名
+        description: 用户昵称
+      - name: email
+        type: VARCHAR(100)
+        chinese_name: 邮箱
+        description: 用户邮箱地址
+      - name: phone
+        type: VARCHAR(20)
+        chinese_name: 手机号
+        description: 用户手机号码
+      - name: gender
+        type: VARCHAR(10)
+        chinese_name: 性别
+        description: 用户性别
+        enum_values: [male, female, unknown]
+      - name: birth_date
+        type: DATE
+        chinese_name: 出生日期
+        description: 用户出生日期
+      - name: city
+        type: VARCHAR(50)
+        chinese_name: 城市
+        description: 用户所在城市
+      - name: province
+        type: VARCHAR(50)
+        chinese_name: 省份
+        description: 用户所在省份
+      - name: register_date
+        type: TIMESTAMP
+        chinese_name: 注册时间
+        description: 用户注册时间
+      - name: user_level
+        type: VARCHAR(20)
+        chinese_name: 用户等级
+        description: 会员等级
+        enum_values: [normal, silver, gold, platinum]
+    common_queries:
+      - "查询用户数量"
+      - "按城市统计用户分布"
+      - "查询某等级的用户"
+
+  - name: ods_products
+    layer: ODS
+    chinese_name: 原始商品表
+    description: 商品基础信息，包含品类、品牌、价格、成本
+    update_frequency: daily
+    row_count_approx: 200
+    columns:
+      - name: product_id
+        type: BIGINT
+        chinese_name: 商品ID
+        description: 唯一商品标识
+        is_primary_key: true
+      - name: product_name
+        type: VARCHAR(200)
+        chinese_name: 商品名称
+        description: 商品完整名称
+      - name: category_l1
+        type: VARCHAR(50)
+        chinese_name: 一级品类
+        description: 商品一级分类（电子产品/服装/美妆/食品/图书/家居）
+        enum_values: [电子产品, 服装, 美妆, 食品, 图书, 家居]
+      - name: category_l2
+        type: VARCHAR(50)
+        chinese_name: 二级品类
+        description: 商品二级分类
+      - name: brand
+        type: VARCHAR(100)
+        chinese_name: 品牌
+        description: 商品品牌名
+      - name: price
+        type: DECIMAL(10,2)
+        chinese_name: 售价
+        description: 商品销售价格
+      - name: cost
+        type: DECIMAL(10,2)
+        chinese_name: 成本
+        description: 商品成本价
+      - name: stock
+        type: INT
+        chinese_name: 库存
+        description: 当前库存数量
+      - name: status
+        type: VARCHAR(20)
+        chinese_name: 状态
+        description: 商品上架状态
+        enum_values: [active, inactive, discontinued]
+      - name: created_at
+        type: TIMESTAMP
+        chinese_name: 创建时间
+        description: 商品录入时间
+    common_queries:
+      - "查询某品类下的商品"
+      - "按品牌统计商品数"
+      - "查询库存不足的商品"
+
+  - name: ods_orders
+    layer: ODS
+    chinese_name: 原始订单表
+    description: 订单交易原始数据，包含用户、商品、金额、状态
+    update_frequency: daily
+    row_count_approx: 5000
+    columns:
+      - name: order_id
+        type: BIGINT
+        chinese_name: 订单ID
+        description: 唯一订单标识
+        is_primary_key: true
+      - name: user_id
+        type: BIGINT
+        chinese_name: 用户ID
+        description: 下单用户ID
+      - name: product_id
+        type: BIGINT
+        chinese_name: 商品ID
+        description: 购买的商品ID
+      - name: quantity
+        type: INT
+        chinese_name: 数量
+        description: 购买数量
+      - name: unit_price
+        type: DECIMAL(10,2)
+        chinese_name: 单价
+        description: 下单时的商品单价
+      - name: total_amount
+        type: DECIMAL(12,2)
+        chinese_name: 订单金额
+        description: 订单总金额（单价×数量）
+        business_logic: unit_price * quantity
+      - name: order_status
+        type: VARCHAR(20)
+        chinese_name: 订单状态
+        description: 当前订单状态
+        enum_values: [pending, paid, shipped, completed, cancelled]
+      - name: payment_method
+        type: VARCHAR(20)
+        chinese_name: 支付方式
+        description: 支付渠道
+        enum_values: [alipay, wechat, card, cash]
+      - name: created_at
+        type: TIMESTAMP
+        chinese_name: 创建时间
+        description: 订单创建时间
+      - name: updated_at
+        type: TIMESTAMP
+        chinese_name: 更新时间
+        description: 订单最后更新时间
+    common_queries:
+      - "查询某时间段的订单数"
+      - "统计各状态的订单分布"
+      - "某用户的订单记录"
+    relationships:
+      - target_table: ods_users
+        join_key: user_id
+        join_type: many_to_one
+      - target_table: ods_products
+        join_key: product_id
+        join_type: many_to_one
+
+  - name: ods_payments
+    layer: ODS
+    chinese_name: 支付流水表
+    description: 订单支付流水记录，包含支付金额、方式、状态
+    update_frequency: daily
+    row_count_approx: 4500
+    columns:
+      - name: payment_id
+        type: BIGINT
+        chinese_name: 支付ID
+        description: 唯一支付标识
+        is_primary_key: true
+      - name: order_id
+        type: BIGINT
+        chinese_name: 订单ID
+        description: 关联的订单ID
+      - name: amount
+        type: DECIMAL(12,2)
+        chinese_name: 支付金额
+        description: 实际支付金额
+      - name: payment_method
+        type: VARCHAR(20)
+        chinese_name: 支付方式
+        description: 支付渠道
+        enum_values: [alipay, wechat, card, cash]
+      - name: payment_status
+        type: VARCHAR(20)
+        chinese_name: 支付状态
+        description: 支付结果
+        enum_values: [success, failed, refunded]
+      - name: paid_at
+        type: TIMESTAMP
+        chinese_name: 支付时间
+        description: 支付完成时间
+    common_queries:
+      - "查询支付成功的订单"
+      - "按支付方式统计金额"
+      - "查询退款记录"
+    relationships:
+      - target_table: ods_orders
+        join_key: order_id
+        join_type: many_to_one
+
+  - name: ods_user_behavior
+    layer: ODS
+    chinese_name: 用户行为日志
+    description: 用户在平台上的浏览、加购、收藏、搜索等行为记录
+    update_frequency: realtime
+    row_count_approx: 10000
+    columns:
+      - name: log_id
+        type: BIGSERIAL
+        chinese_name: 日志ID
+        description: 自增日志标识
+        is_primary_key: true
+      - name: user_id
+        type: BIGINT
+        chinese_name: 用户ID
+        description: 操作用户ID
+      - name: product_id
+        type: BIGINT
+        chinese_name: 商品ID
+        description: 相关商品ID（搜索行为时可为空）
+      - name: behavior_type
+        type: VARCHAR(20)
+        chinese_name: 行为类型
+        description: 用户行为类型
+        enum_values: [view, cart, favorite, purchase, search]
+      - name: search_keyword
+        type: VARCHAR(200)
+        chinese_name: 搜索关键词
+        description: 搜索行为时的关键词
+      - name: page_name
+        type: VARCHAR(50)
+        chinese_name: 页面名称
+        description: 行为发生的页面
+        enum_values: [home, category, product_detail, cart, search_result, order_confirm]
+      - name: event_time
+        type: TIMESTAMP
+        chinese_name: 事件时间
+        description: 行为发生时间
+    common_queries:
+      - "统计各行为类型的数量"
+      - "查询热门搜索关键词"
+      - "某商品的浏览量"
+    relationships:
+      - target_table: ods_users
+        join_key: user_id
+        join_type: many_to_one
+      - target_table: ods_products
+        join_key: product_id
+        join_type: many_to_one
+
+  # ==========================================================
+  # DWD Layer (清洗明细层)
+  # ==========================================================
+  - name: dwd_order_detail
+    layer: DWD
+    chinese_name: 订单明细宽表
+    description: 从ODS层订单、用户、商品、支付四表清洗关联而来的订单明细数据，是最常用的分析查询表
+    update_frequency: daily
+    row_count_approx: 5000
+    columns:
+      - name: order_id
+        type: BIGINT
+        chinese_name: 订单ID
+        description: 唯一订单标识
+        is_primary_key: true
+      - name: user_id
+        type: BIGINT
+        chinese_name: 用户ID
+        description: 下单用户ID
+      - name: username
+        type: VARCHAR(50)
+        chinese_name: 用户名
+        description: 下单用户名称
+      - name: user_level
+        type: VARCHAR(20)
+        chinese_name: 用户等级
+        description: 下单时的会员等级
+        enum_values: [normal, silver, gold, platinum]
+      - name: user_city
+        type: VARCHAR(50)
+        chinese_name: 用户城市
+        description: 用户所在城市
+      - name: user_province
+        type: VARCHAR(50)
+        chinese_name: 用户省份
+        description: 用户所在省份
+      - name: product_id
+        type: BIGINT
+        chinese_name: 商品ID
+        description: 购买的商品ID
+      - name: product_name
+        type: VARCHAR(200)
+        chinese_name: 商品名称
+        description: 购买的商品名称
+      - name: category_l1
+        type: VARCHAR(50)
+        chinese_name: 一级品类
+        description: 商品一级分类
+      - name: category_l2
+        type: VARCHAR(50)
+        chinese_name: 二级品类
+        description: 商品二级分类
+      - name: brand
+        type: VARCHAR(100)
+        chinese_name: 品牌
+        description: 商品品牌
+      - name: quantity
+        type: INT
+        chinese_name: 数量
+        description: 购买数量
+      - name: unit_price
+        type: DECIMAL(10,2)
+        chinese_name: 单价
+        description: 商品单价
+      - name: total_amount
+        type: DECIMAL(12,2)
+        chinese_name: 订单金额
+        description: 订单总金额
+        business_logic: unit_price * quantity
+      - name: cost_amount
+        type: DECIMAL(12,2)
+        chinese_name: 成本金额
+        description: 订单成本
+        business_logic: product.cost * quantity
+      - name: profit
+        type: DECIMAL(12,2)
+        chinese_name: 利润
+        description: 订单利润
+        business_logic: total_amount - cost_amount
+      - name: order_status
+        type: VARCHAR(20)
+        chinese_name: 订单状态
+        description: 订单当前状态
+        enum_values: [pending, paid, shipped, completed, cancelled]
+      - name: payment_method
+        type: VARCHAR(20)
+        chinese_name: 支付方式
+        description: 支付渠道
+        enum_values: [alipay, wechat, card, cash]
+      - name: payment_status
+        type: VARCHAR(20)
+        chinese_name: 支付状态
+        description: 支付结果
+        enum_values: [success, failed, refunded, pending]
+      - name: order_date
+        type: DATE
+        chinese_name: 订单日期
+        description: 订单创建日期（不含时间）
+      - name: order_hour
+        type: INT
+        chinese_name: 下单小时
+        description: 下单时刻（0-23）
+      - name: paid_at
+        type: TIMESTAMP
+        chinese_name: 支付时间
+        description: 支付完成时间
+      - name: created_at
+        type: TIMESTAMP
+        chinese_name: 创建时间
+        description: 订单创建时间
+    common_queries:
+      - "查询某时间段的销售额"
+      - "按品类统计订单数"
+      - "某用户的历史订单"
+      - "各城市的销售分布"
+      - "计算各品类利润率"
+    relationships:
+      - target_table: dwd_user_profile
+        join_key: user_id
+        join_type: many_to_one
+      - target_table: dwd_product_dim
+        join_key: product_id
+        join_type: many_to_one
+
+  - name: dwd_user_profile
+    layer: DWD
+    chinese_name: 用户画像表
+    description: 用户维度的聚合画像数据，包含消费统计、偏好品类、活跃状态
+    update_frequency: daily
+    row_count_approx: 1000
+    columns:
+      - name: user_id
+        type: BIGINT
+        chinese_name: 用户ID
+        description: 唯一用户标识
+        is_primary_key: true
+      - name: username
+        type: VARCHAR(50)
+        chinese_name: 用户名
+        description: 用户昵称
+      - name: gender
+        type: VARCHAR(10)
+        chinese_name: 性别
+        description: 用户性别
+        enum_values: [male, female, unknown]
+      - name: age_group
+        type: VARCHAR(20)
+        chinese_name: 年龄段
+        description: 用户年龄区间
+        enum_values: ["18-24", "25-34", "35-44", "45+"]
+      - name: city
+        type: VARCHAR(50)
+        chinese_name: 城市
+        description: 用户所在城市
+      - name: province
+        type: VARCHAR(50)
+        chinese_name: 省份
+        description: 用户所在省份
+      - name: user_level
+        type: VARCHAR(20)
+        chinese_name: 用户等级
+        description: 会员等级
+        enum_values: [normal, silver, gold, platinum]
+      - name: register_date
+        type: DATE
+        chinese_name: 注册日期
+        description: 用户注册日期
+      - name: days_since_register
+        type: INT
+        chinese_name: 注册天数
+        description: 从注册到当前的天数
+      - name: total_orders
+        type: INT
+        chinese_name: 总订单数
+        description: 历史总下单次数
+      - name: total_spent
+        type: DECIMAL(14,2)
+        chinese_name: 总消费额
+        description: 历史总消费金额
+      - name: avg_order_amount
+        type: DECIMAL(10,2)
+        chinese_name: 平均客单价
+        description: 平均每单金额
+        business_logic: total_spent / total_orders
+      - name: favorite_category
+        type: VARCHAR(50)
+        chinese_name: 偏好品类
+        description: 购买次数最多的一级品类
+      - name: last_order_date
+        type: DATE
+        chinese_name: 最近下单日期
+        description: 最近一次下单的日期
+      - name: is_active
+        type: BOOLEAN
+        chinese_name: 是否活跃
+        description: 30天内是否有下单
+        business_logic: last_order_date >= CURRENT_DATE - 30
+    common_queries:
+      - "查询活跃用户数"
+      - "按等级统计用户消费"
+      - "高价值用户分析"
+      - "用户地域分布"
+
+  - name: dwd_product_dim
+    layer: DWD
+    chinese_name: 商品维度表
+    description: 商品维度信息加上历史销量和收入统计
+    update_frequency: daily
+    row_count_approx: 200
+    columns:
+      - name: product_id
+        type: BIGINT
+        chinese_name: 商品ID
+        description: 唯一商品标识
+        is_primary_key: true
+      - name: product_name
+        type: VARCHAR(200)
+        chinese_name: 商品名称
+        description: 商品完整名称
+      - name: category_l1
+        type: VARCHAR(50)
+        chinese_name: 一级品类
+        description: 商品一级分类
+      - name: category_l2
+        type: VARCHAR(50)
+        chinese_name: 二级品类
+        description: 商品二级分类
+      - name: brand
+        type: VARCHAR(100)
+        chinese_name: 品牌
+        description: 商品品牌
+      - name: price
+        type: DECIMAL(10,2)
+        chinese_name: 售价
+        description: 当前销售价
+      - name: cost
+        type: DECIMAL(10,2)
+        chinese_name: 成本
+        description: 商品成本价
+      - name: margin_rate
+        type: DECIMAL(5,4)
+        chinese_name: 毛利率
+        description: 商品毛利率
+        business_logic: (price - cost) / price
+      - name: status
+        type: VARCHAR(20)
+        chinese_name: 状态
+        description: 商品上架状态
+        enum_values: [active, inactive, discontinued]
+      - name: total_sold
+        type: INT
+        chinese_name: 历史总销量
+        description: 累计销售数量
+      - name: total_revenue
+        type: DECIMAL(14,2)
+        chinese_name: 历史总收入
+        description: 累计销售收入
+    common_queries:
+      - "查询销量最高的商品"
+      - "各品类的毛利率对比"
+      - "某品牌的商品列表"
+
+  # ==========================================================
+  # DWS Layer (聚合统计层)
+  # ==========================================================
+  - name: dws_daily_sales
+    layer: DWS
+    chinese_name: 每日销售聚合
+    description: 按日期和一级品类维度聚合的销售数据，用于趋势分析
+    update_frequency: daily
+    row_count_approx: 1000
+    columns:
+      - name: stat_date
+        type: DATE
+        chinese_name: 统计日期
+        description: 聚合的日期
+        is_primary_key: true
+      - name: category_l1
+        type: VARCHAR(50)
+        chinese_name: 一级品类
+        description: 商品一级分类
+        is_primary_key: true
+      - name: order_count
+        type: INT
+        chinese_name: 订单数
+        description: 当日该品类的订单数量
+      - name: total_amount
+        type: DECIMAL(14,2)
+        chinese_name: 销售总额
+        description: 当日该品类的销售总额
+      - name: total_profit
+        type: DECIMAL(14,2)
+        chinese_name: 利润总额
+        description: 当日该品类的利润总额
+      - name: unique_buyers
+        type: INT
+        chinese_name: 独立买家数
+        description: 当日该品类的去重购买用户数
+      - name: avg_order_amount
+        type: DECIMAL(10,2)
+        chinese_name: 平均客单价
+        description: 当日该品类的平均订单金额
+    common_queries:
+      - "最近7天每天的销售额趋势"
+      - "各品类的日均销售对比"
+      - "某日的销售总览"
+
+  - name: dws_user_activity
+    layer: DWS
+    chinese_name: 用户活跃度聚合
+    description: 按日期和用户等级维度聚合的用户活跃数据
+    update_frequency: daily
+    row_count_approx: 700
+    columns:
+      - name: stat_date
+        type: DATE
+        chinese_name: 统计日期
+        description: 聚合的日期
+        is_primary_key: true
+      - name: user_level
+        type: VARCHAR(20)
+        chinese_name: 用户等级
+        description: 会员等级
+        is_primary_key: true
+        enum_values: [normal, silver, gold, platinum]
+      - name: active_users
+        type: INT
+        chinese_name: 活跃用户数
+        description: 当日下单的用户数
+      - name: new_users
+        type: INT
+        chinese_name: 新增用户数
+        description: 当日注册的用户数
+      - name: total_orders
+        type: INT
+        chinese_name: 订单数
+        description: 当日该等级用户的订单总数
+      - name: total_amount
+        type: DECIMAL(14,2)
+        chinese_name: 消费总额
+        description: 当日该等级用户的消费总额
+    common_queries:
+      - "各等级用户的日活趋势"
+      - "新用户增长趋势"
+      - "金牌用户的消费贡献"
+
+  - name: dws_product_ranking
+    layer: DWS
+    chinese_name: 商品排行（周维度）
+    description: 按周聚合的商品销量和销售额排行榜
+    update_frequency: weekly
+    row_count_approx: 2000
+    columns:
+      - name: week_start
+        type: DATE
+        chinese_name: 周起始日
+        description: 排行统计的周一日期
+        is_primary_key: true
+      - name: product_id
+        type: BIGINT
+        chinese_name: 商品ID
+        description: 商品标识
+        is_primary_key: true
+      - name: product_name
+        type: VARCHAR(200)
+        chinese_name: 商品名称
+        description: 商品名称
+      - name: category_l1
+        type: VARCHAR(50)
+        chinese_name: 一级品类
+        description: 商品一级分类
+      - name: sold_quantity
+        type: INT
+        chinese_name: 销售数量
+        description: 该周的销售件数
+      - name: revenue
+        type: DECIMAL(14,2)
+        chinese_name: 销售额
+        description: 该周的销售收入
+      - name: rank_by_revenue
+        type: INT
+        chinese_name: 销售额排名
+        description: 按销售额降序排名
+      - name: rank_by_quantity
+        type: INT
+        chinese_name: 销量排名
+        description: 按销量降序排名
+    common_queries:
+      - "本周销量TOP10商品"
+      - "某品类的周销售排行"
+      - "某商品的周趋势排名变化"
+
+  # ==========================================================
+  # System Tables (系统表)
+  # ==========================================================
+  - name: query_history
+    layer: SYSTEM
+    chinese_name: 查询历史
+    description: 系统记录的每次自然语言查询及其SQL生成、执行结果、性能数据
+    update_frequency: realtime
+    row_count_approx: 0
+    columns:
+      - name: id
+        type: BIGSERIAL
+        chinese_name: 记录ID
+        description: 自增主键
+        is_primary_key: true
+      - name: session_id
+        type: VARCHAR(50)
+        chinese_name: 会话ID
+        description: 用户会话标识
+      - name: user_query
+        type: TEXT
+        chinese_name: 用户问题
+        description: 用户输入的自然语言问题
+      - name: intent
+        type: VARCHAR(30)
+        chinese_name: 意图分类
+        description: 系统识别的查询意图
+        enum_values: [simple_query, aggregation, multi_join, exploration, clarification]
+      - name: generated_sql
+        type: TEXT
+        chinese_name: 生成的SQL
+        description: 系统生成的SQL查询语句
+      - name: execution_success
+        type: BOOLEAN
+        chinese_name: 执行是否成功
+        description: SQL执行是否成功
+      - name: retry_count
+        type: INT
+        chinese_name: 重试次数
+        description: 自修正重试次数
+      - name: model_used
+        type: VARCHAR(50)
+        chinese_name: 使用模型
+        description: 本次查询使用的LLM模型
+      - name: latency_ms
+        type: INT
+        chinese_name: 延迟毫秒
+        description: 从请求到响应的总耗时
+      - name: token_count
+        type: INT
+        chinese_name: Token数
+        description: LLM消耗的总Token数
+      - name: estimated_cost
+        type: DECIMAL(8,6)
+        chinese_name: 预估成本
+        description: 本次查询的API调用预估成本（美元）
+      - name: created_at
+        type: TIMESTAMP
+        chinese_name: 创建时间
+        description: 记录创建时间
+
+  - name: schema_embeddings
+    layer: SYSTEM
+    chinese_name: Schema向量索引
+    description: 数据字典的向量化索引，用于语义检索相关表和字段
+    update_frequency: on_demand
+    row_count_approx: 0
+    columns:
+      - name: id
+        type: BIGSERIAL
+        chinese_name: 记录ID
+        description: 自增主键
+        is_primary_key: true
+      - name: table_name
+        type: VARCHAR(100)
+        chinese_name: 表名
+        description: 关联的数据表名称
+      - name: column_name
+        type: VARCHAR(100)
+        chinese_name: 字段名
+        description: 关联的字段名，NULL表示表级别描述
+      - name: description
+        type: TEXT
+        chinese_name: 描述文本
+        description: 用于Embedding的拼接文本描述
+      - name: embedding
+        type: vector(1536)
+        chinese_name: 向量
+        description: 1536维的文本向量（OpenAI text-embedding-3-small）
+      - name: metadata
+        type: JSONB
+        chinese_name: 元数据
+        description: 额外信息，如数据层级、数据类型等

@@ -1,0 +1,38 @@
+[project]
+name = "elytra"
+version = "0.1.0"
+description = "LLM-powered intelligent data analysis system with NL2SQL"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]",
+    "psycopg2-binary",
+    "langchain>=0.3",
+    "langchain-openai",
+    "langchain-anthropic",
+    "langchain-community",
+    "langgraph",
+    "rank-bm25",
+    "pgvector",
+    "openai",
+    "streamlit>=1.35",
+    "pydantic>=2.0",
+    "pyyaml",
+    "python-dotenv",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
