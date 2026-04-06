@@ -1,0 +1,67 @@
+# Elytra — local development stack
+#
+# Bring up everything:
+#     docker compose up --build
+#
+# First boot, after the DB is healthy, populate schema_embeddings (one-shot):
+#     docker compose exec backend python -m src.retrieval.bootstrap
+#
+# Then run the eval suite against the running stack:
+#     docker compose exec backend python eval/run_eval.py
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: Elytra
+      POSTGRES_USER: Elytra
+      POSTGRES_PASSWORD: Elytra_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./db/seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U Elytra -d Elytra"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # Override DATABASE_URL so the backend talks to the compose-internal DB,
+      # regardless of what .env says (which may target localhost).
+      DATABASE_URL: postgresql://Elytra:Elytra_dev@db:5432/Elytra
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Bind-mount source for live reload during development.
+      - ./src:/app/src:ro
+      - ./db/data_dictionary.yaml:/app/db/data_dictionary.yaml:ro
+      - ./eval:/app/eval
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      API_URL: http://backend:8000
+      API_TIMEOUT: "120"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/app.py:/app/app.py:ro
+
+volumes:
+  pgdata:

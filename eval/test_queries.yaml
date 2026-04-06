@@ -1,0 +1,158 @@
+# Elytra evaluation test set (PRD §6.1)
+#
+# Each case drives one /api/query call. Result-checking is intentionally
+# tolerant — we don't pin SQL token-for-token, only assert that key terms
+# appear (case-insensitively) and that the row shape makes sense.
+#
+# Fields:
+#   id                       - stable test id
+#   category                 - simple_query | aggregation | multi_join | exploration | ranking
+#   query                    - the natural-language question
+#   expected_tables          - list of tables we expect the agent to retrieve & query
+#                              (recall metric: hit if ANY of these is referenced in
+#                              the generated SQL)
+#   expected_sql_contains    - substrings that must appear in the SQL (case-insensitive)
+#   expected_result_check    - assertion about the result rows
+#       type:
+#         single_value : exactly one row, one column; "condition" is a python expr on `value`
+#         first_row    : first row's `column` matches `condition`
+#         row_count    : number of rows matches `condition`
+#         non_empty    : at least one row
+#       column        : (single_value/first_row) which column to inspect
+#       condition     : a python expression evaluated against `value` (for single_value/first_row)
+#                       or `count` (for row_count). Booleans only.
+
+test_cases:
+  # ---------------------- simple_query ----------------------
+  - id: 1
+    category: simple_query
+    query: "总共有多少个用户"
+    expected_tables: [dwd_user_profile, ods_users]
+    expected_sql_contains: ["count", "user"]
+    expected_result_check:
+      type: single_value
+      condition: "value > 0"
+
+  - id: 2
+    category: simple_query
+    query: "查询所有金牌等级的用户数量"
+    expected_tables: [dwd_user_profile, ods_users]
+    expected_sql_contains: ["count", "gold"]
+    expected_result_check:
+      type: single_value
+      condition: "value >= 0"
+
+  - id: 3
+    category: simple_query
+    query: "按城市统计用户分布，列出前 5 个城市"
+    expected_tables: [dwd_user_profile, ods_users]
+    expected_sql_contains: ["city", "group by", "limit"]
+    expected_result_check:
+      type: row_count
+      condition: "0 < count <= 5"
+
+  # ---------------------- aggregation ----------------------
+  - id: 4
+    category: aggregation
+    query: "按一级品类统计总销售额，从高到低排序"
+    expected_tables: [dwd_order_detail, dws_daily_sales]
+    expected_sql_contains: ["sum", "category_l1", "group by", "order by"]
+    expected_result_check:
+      type: first_row
+      column: category_l1
+      condition: "value is not None"
+
+  - id: 5
+    category: aggregation
+    query: "上个月销售额最高的商品品类是什么"
+    expected_tables: [dwd_order_detail, dws_daily_sales]
+    expected_sql_contains: ["sum", "category_l1", "group by", "order by"]
+    expected_result_check:
+      type: non_empty
+
+  - id: 6
+    category: aggregation
+    query: "最近 7 天每天的订单数量"
+    expected_tables: [dwd_order_detail, dws_daily_sales]
+    expected_sql_contains: ["count", "group by", "order by"]
+    expected_result_check:
+      type: row_count
+      condition: "count >= 1"
+
+  - id: 7
+    category: aggregation
+    query: "各支付方式的订单占比"
+    expected_tables: [dwd_order_detail, ods_orders, ods_payments]
+    expected_sql_contains: ["payment_method", "group by"]
+    expected_result_check:
+      type: row_count
+      condition: "count >= 1"
+
+  # ---------------------- multi_join / cross-table ----------------------
+  - id: 8
+    category: multi_join
+    query: "金牌用户最喜欢购买哪个品牌的商品"
+    expected_tables: [dwd_order_detail]
+    expected_sql_contains: ["user_level", "brand", "group by"]
+    expected_result_check:
+      type: first_row
+      column: brand
+      condition: "value is not None"
+
+  - id: 9
+    category: multi_join
+    query: "哪个城市的客单价最高"
+    expected_tables: [dwd_order_detail, dwd_user_profile]
+    expected_sql_contains: ["city", "avg", "order by"]
+    expected_result_check:
+      type: first_row
+      column: city
+      condition: "value is not None"
+
+  - id: 10
+    category: multi_join
+    query: "电子产品品类下卖得最好的 3 个商品"
+    expected_tables: [dwd_order_detail, dwd_product_dim, dws_product_ranking]
+    expected_sql_contains: ["电子产品", "limit"]
+    expected_result_check:
+      type: row_count
+      condition: "0 < count <= 3"
+
+  # ---------------------- ranking ----------------------
+  - id: 11
+    category: ranking
+    query: "毛利率最高的 5 个商品"
+    expected_tables: [dwd_product_dim]
+    expected_sql_contains: ["margin_rate", "order by", "limit"]
+    expected_result_check:
+      type: row_count
+      condition: "0 < count <= 5"
+
+  - id: 12
+    category: ranking
+    query: "活跃用户数最多的省份 top 5"
+    expected_tables: [dwd_user_profile]
+    expected_sql_contains: ["province", "group by", "limit"]
+    expected_result_check:
+      type: row_count
+      condition: "0 < count <= 5"
+
+  # ---------------------- exploration ----------------------
+  - id: 13
+    category: exploration
+    query: "数据库里有哪些和订单相关的表"
+    expected_tables: [dwd_order_detail, ods_orders]
+    # exploration intent may produce SELECT from information_schema or just
+    # describe; we only check that *some* relevant table appears in the SQL
+    expected_sql_contains: []
+    expected_result_check:
+      type: non_empty
+
+  - id: 14
+    category: simple_query
+    query: "总销售额是多少"
+    expected_tables: [dwd_order_detail, dws_daily_sales]
+    expected_sql_contains: ["sum", "total_amount"]
+    expected_result_check:
+      type: single_value
+      condition: "value is not None and value > 0"

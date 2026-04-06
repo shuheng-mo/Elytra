@@ -206,5 +206,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# others
+# other files to ignore
 prd.md
+
+# Eval reports — machine-generated, keep the dir but ignore the contents
+eval/results/*
+!eval/results/.gitkeep

@@ -1,0 +1,85 @@
+<svg width="512" height="600" viewBox="0 0 512 600" xmlns="http://www.w3.org/2000/svg">
+  <!-- Elytra Logo — Hex/Wireframe + Wordmark -->
+  <g transform="translate(256, 233)">
+    <path d="M-5,-148 L-48,-132 L-82,-90 L-102,-30 L-106,30 L-94,82 L-68,125 L-34,152 L-5,160 Z" fill="#0B2D6E"/>
+    <path d="M5,-148 L48,-132 L82,-90 L102,-30 L106,30 L94,82 L68,125 L34,152 L5,160 Z" fill="#0B2D6E"/>
+
+    <!-- Left mesh -->
+    <line x1="-5" y1="-148" x2="-48" y2="-132" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-5" y1="-148" x2="-5" y2="-60" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="-48" y1="-132" x2="-5" y2="-60" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-48" y1="-132" x2="-82" y2="-90" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="-82" y1="-90" x2="-5" y2="-60" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-5" y1="-60" x2="-102" y2="-30" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-82" y1="-90" x2="-102" y2="-30" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="-5" y1="-60" x2="-5" y2="20" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="-102" y1="-30" x2="-5" y2="20" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-102" y1="-30" x2="-106" y2="30" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="-106" y1="30" x2="-5" y2="20" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-5" y1="20" x2="-5" y2="90" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="-106" y1="30" x2="-5" y2="90" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-106" y1="30" x2="-94" y2="82" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="-94" y1="82" x2="-5" y2="90" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-5" y1="90" x2="-5" y2="160" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="-94" y1="82" x2="-68" y2="125" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="-68" y1="125" x2="-5" y2="90" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-68" y1="125" x2="-5" y2="160" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="-68" y1="125" x2="-34" y2="152" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="-34" y1="152" x2="-5" y2="160" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+
+    <circle cx="-48" cy="-132" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="-82" cy="-90" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="-102" cy="-30" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="-106" cy="30" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="-94" cy="82" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="-68" cy="125" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="-34" cy="152" r="2.5" fill="#00D4E8" opacity="0.5"/>
+
+    <!-- Right mesh -->
+    <line x1="5" y1="-148" x2="48" y2="-132" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="5" y1="-148" x2="5" y2="-60" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="48" y1="-132" x2="5" y2="-60" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="48" y1="-132" x2="82" y2="-90" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="82" y1="-90" x2="5" y2="-60" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="5" y1="-60" x2="102" y2="-30" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="82" y1="-90" x2="102" y2="-30" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="5" y1="-60" x2="5" y2="20" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="102" y1="-30" x2="5" y2="20" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="102" y1="-30" x2="106" y2="30" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="106" y1="30" x2="5" y2="20" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="5" y1="20" x2="5" y2="90" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="106" y1="30" x2="5" y2="90" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="106" y1="30" x2="94" y2="82" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="94" y1="82" x2="5" y2="90" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="5" y1="90" x2="5" y2="160" stroke="#00D4E8" stroke-width="1.8" opacity="0.55"/>
+    <line x1="94" y1="82" x2="68" y2="125" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="68" y1="125" x2="5" y2="90" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="68" y1="125" x2="5" y2="160" stroke="#00D4E8" stroke-width="1.2" opacity="0.35"/>
+    <line x1="68" y1="125" x2="34" y2="152" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+    <line x1="34" y1="152" x2="5" y2="160" stroke="#00D4E8" stroke-width="1.2" opacity="0.3"/>
+
+    <circle cx="48" cy="-132" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="82" cy="-90" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="102" cy="-30" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="106" cy="30" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="94" cy="82" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="68" cy="125" r="2.5" fill="#00D4E8" opacity="0.5"/>
+    <circle cx="34" cy="152" r="2.5" fill="#00D4E8" opacity="0.5"/>
+
+    <!-- Spine dots -->
+    <circle cx="0" cy="-60" r="3" fill="#00D4E8" opacity="0.7"/>
+    <circle cx="0" cy="20" r="3" fill="#00D4E8" opacity="0.7"/>
+    <circle cx="0" cy="90" r="3" fill="#00D4E8" opacity="0.7"/>
+
+    <!-- Head hexagon -->
+    <polygon points="0,-178 -11,-171 -11,-159 0,-152 11,-159 11,-171" fill="#00D4E8"/>
+    <!-- Antennae -->
+    <polyline points="-11,-171 -26,-184 -40,-192" fill="none" stroke="#00D4E8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="11,-171 26,-184 40,-192" fill="none" stroke="#00D4E8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Tail chevron -->
+    <polyline points="-8,166 0,180 8,166" fill="none" stroke="#00D4E8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="256" y="540" text-anchor="middle" font-family="'Inter', 'Helvetica Neue', Arial, sans-serif" font-size="42" font-weight="600" letter-spacing="8" fill="#0B2D6E">ELYTRA</text>
+</svg>

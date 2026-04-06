@@ -28,6 +28,12 @@ dev = [
     "pytest-asyncio",
     "ruff",
 ]
+local-embed = [
+    # In-process embedding via BGE / other sentence-transformers models.
+    # Pulls in torch (~700MB on macOS arm64); only install if you actually
+    # plan to use the local embedding backend.
+    "sentence-transformers>=3.0",
+]
 
 [build-system]
 requires = ["hatchling"]
