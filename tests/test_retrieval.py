@@ -181,7 +181,13 @@ class _StubEmbedder:
         self._scores = scores or {}
         self._raise = raise_exc
 
-    def search(self, query: str, top_n: int = 20) -> Iterable[tuple[str, float]]:
+    def search(
+        self,
+        query: str,
+        top_n: int = 20,
+        *,
+        source_name: str | None = None,
+    ) -> Iterable[tuple[str, float]]:
         if self._raise:
             raise RuntimeError("simulated DB outage")
         return list(self._scores.items())[:top_n]

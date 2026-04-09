@@ -6,13 +6,23 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-SqlDialect = Literal["postgresql", "hiveql", "sparksql"]
+SqlDialect = Literal["postgresql", "duckdb", "starrocks", "hiveql", "sparksql"]
 
 
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000, description="自然语言问题")
     session_id: Optional[str] = Field(None, max_length=64, description="会话ID，可选")
-    dialect: SqlDialect = Field("postgresql", description="目标 SQL 方言")
+    source: Optional[str] = Field(
+        None,
+        max_length=64,
+        description="数据源名称（对应 datasources.yaml 中的 name；省略则使用 default_source）",
+    )
+    # `dialect` is retained for backwards compatibility with Phase 1 clients
+    # but the dialect is now derived from the connector behind `source`.
+    dialect: Optional[SqlDialect] = Field(
+        None,
+        description="（已弃用）SQL 方言，自动从数据源推断",
+    )
 
 
 class HistoryQueryParams(BaseModel):

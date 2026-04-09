@@ -188,11 +188,13 @@ CREATE TABLE query_history (
 
 CREATE TABLE schema_embeddings (
     id              BIGSERIAL PRIMARY KEY,
+    source_name     VARCHAR(100) NOT NULL,    -- 数据源名称（对应 datasources.yaml）
     table_name      VARCHAR(100) NOT NULL,
-    column_name     VARCHAR(100),            -- NULL 表示表级别描述
+    column_name     VARCHAR(100),             -- NULL 表示表级别描述
     description     TEXT NOT NULL,            -- 拼接的文本描述
     embedding       vector(1536) NOT NULL,    -- pgvector 向量字段
     metadata        JSONB                     -- 额外信息（层级、数据类型等）
 );
 
 CREATE INDEX ON schema_embeddings USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX schema_embeddings_source_idx ON schema_embeddings (source_name);

@@ -16,7 +16,7 @@ Intent = Literal[
     "clarification",
 ]
 
-SqlDialect = Literal["postgresql", "hiveql", "sparksql"]
+SqlDialect = Literal["postgresql", "duckdb", "starrocks", "hiveql", "sparksql"]
 
 
 class CorrectionAttempt(TypedDict):
@@ -40,6 +40,9 @@ class AgentState(TypedDict, total=False):
     # ----- Model routing -----
     model_used: str
     complexity_score: int  # 1-5
+
+    # ----- Data source routing -----
+    active_source: str  # name of the connector to run against (matches datasources.yaml)
 
     # ----- SQL generation -----
     generated_sql: str
@@ -70,6 +73,7 @@ def make_initial_state(
     user_query: str,
     session_id: str = "",
     sql_dialect: SqlDialect = "postgresql",
+    active_source: str = "",
 ) -> AgentState:
     """Build a fresh AgentState with sensible defaults for every field."""
     return AgentState(
@@ -80,6 +84,7 @@ def make_initial_state(
         retrieved_schemas=[],
         model_used="",
         complexity_score=1,
+        active_source=active_source,
         generated_sql="",
         sql_dialect=sql_dialect,
         execution_success=False,

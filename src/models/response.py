@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 class QueryResponse(BaseModel):
     success: bool
     query: str
+    source: Optional[str] = None  # which datasource was queried
+    dialect: Optional[str] = None  # which SQL dialect was generated
     intent: Optional[str] = None
     generated_sql: Optional[str] = None
     result: Optional[list[dict[str, Any]]] = None
@@ -26,6 +28,25 @@ class QueryResponse(BaseModel):
     latency_ms: int = 0
     token_count: int = 0
     error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# /api/datasources
+# ---------------------------------------------------------------------------
+
+
+class DataSourceDescriptor(BaseModel):
+    name: str
+    dialect: str
+    description: str = ""
+    connected: bool = False
+    table_count: Optional[int] = None
+    is_default: bool = False
+
+
+class DataSourcesResponse(BaseModel):
+    datasources: list[DataSourceDescriptor]
+    default: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

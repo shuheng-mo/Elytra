@@ -1,34 +1,84 @@
-"""FastAPI app entrypoint for Elytra (Phase 1).
+"""FastAPI app entrypoint for Elytra.
 
 Run locally:
 
     uvicorn src.main:app --reload --port 8000
 
-The Streamlit frontend (Step 6) will hit this on the same host. CORS is wide
-open during Phase 1 so the dev frontend on a different port can talk to it;
-Phase 2's hardening pass should restrict it.
+The Streamlit frontend hits this on the same host. CORS is wide open during
+Phase 1/2 so the dev frontend on a different port can talk to it; production
+hardening should restrict it.
+
+Lifecycle:
+    * startup → ConnectorRegistry.init_from_yaml(settings.datasources_yaml_path)
+    * shutdown → ConnectorRegistry.disconnect_all()
 """
 
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.datasources import router as datasources_router
 from src.api.history import router as history_router
 from src.api.query import router as query_router
 from src.api.schema import router as schema_router
+from src.config import settings
+from src.connectors.registry import ConnectorRegistry
+from src.retrieval.schema_loader import SchemaLoader
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 
+logger = logging.getLogger("elytra.main")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Initialize the connector registry + warm the schema cache on startup.
+
+    Schema preload is important: ``retrieve_schema_node`` is a sync LangGraph
+    node, so it can't ``await`` a connector's ``get_tables()`` at request
+    time. We populate ``SchemaLoader._source_cache`` here so the node only
+    ever hits the cache.
+    """
+    registry = ConnectorRegistry.get_instance()
+    try:
+        await registry.init_from_yaml(settings.datasources_yaml_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("connector registry init failed: %s", exc)
+        # Still let the app come up so /healthz works and operators can debug.
+
+    # Warm the schema cache for every source that came up successfully.
+    for cfg in registry.raw_configs():
+        name = cfg.get("name")
+        if not name:
+            continue
+        try:
+            connector = registry.get(name)
+            if not connector.is_connected:
+                continue
+            await SchemaLoader.load_from_connector(connector, cfg.get("overlay"))
+            logger.info("schema cache warmed for %s", name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("schema preload failed for %s: %s", name, exc)
+
+    yield
+    try:
+        await registry.disconnect_all()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("registry shutdown error: %s", exc)
+
+
 app = FastAPI(
     title="Elytra",
     description="LLM-powered NL→SQL data analysis backend",
-    version="0.1.0",
+    version="0.2.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -48,3 +98,4 @@ def healthz() -> dict[str, str]:
 app.include_router(query_router)
 app.include_router(schema_router)
 app.include_router(history_router)
+app.include_router(datasources_router)

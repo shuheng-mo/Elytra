@@ -92,7 +92,20 @@ class TableInfo:
 
 
 class SchemaLoader:
-    """Reads and caches the data dictionary YAML."""
+    """Reads and caches schema metadata.
+
+    Two loading modes coexist:
+
+    * **Legacy YAML** (Phase 1) — ``load()`` reads ``data_dictionary.yaml``
+      and returns ``TableInfo`` directly. Still used by tests and the old
+      ``/api/schema`` path while it migrates.
+    * **Connector + overlay** (Phase 2) — ``load_from_connector(connector,
+      overlay_path)`` introspects a live data source and merges an overlay
+      YAML on top, then caches per-source.
+    """
+
+    # Per-process cache keyed by source name (for the connector-driven path)
+    _source_cache: dict[str, list[TableInfo]] = {}
 
     def __init__(self, path: Path | str | None = None):
         self.path = Path(path) if path else settings.data_dictionary_path
@@ -142,3 +155,40 @@ class SchemaLoader:
 
     def get_by_layer(self, layer: str) -> list[TableInfo]:
         return [t for t in self.load() if t.layer == layer]
+
+    # ----- connector-driven loading (Phase 2) --------------------------------
+
+    @classmethod
+    async def load_from_connector(
+        cls,
+        connector: Any,  # DataSourceConnector — typed as Any to avoid cycle
+        overlay_path: Path | str | None = None,
+        *,
+        reload: bool = False,
+    ) -> list[TableInfo]:
+        """Introspect a live connector and overlay curated metadata.
+
+        Cached per source name. Pass ``reload=True`` to bypass the cache
+        (used by ``bootstrap.py`` after a schema change).
+        """
+        from src.connectors.overlay import enrich_with_overlay  # lazy: avoid cycle
+
+        source_name = getattr(connector, "name", "unnamed")
+        if not reload and source_name in cls._source_cache:
+            return cls._source_cache[source_name]
+
+        metas = await connector.get_tables()
+        tables = enrich_with_overlay(metas, overlay_path)
+        cls._source_cache[source_name] = tables
+        return tables
+
+    @classmethod
+    def get_cached(cls, source_name: str) -> list[TableInfo] | None:
+        return cls._source_cache.get(source_name)
+
+    @classmethod
+    def clear_cache(cls, source_name: str | None = None) -> None:
+        if source_name is None:
+            cls._source_cache.clear()
+        else:
+            cls._source_cache.pop(source_name, None)

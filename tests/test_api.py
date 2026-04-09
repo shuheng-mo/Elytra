@@ -3,11 +3,13 @@
 These tests use FastAPI's ``TestClient`` (httpx-backed) so we don't need a
 running uvicorn process. The agent and the database are stubbed:
 
-* ``run_agent`` is replaced with a fake that returns a canned final state.
+* ``ConnectorRegistry`` is bootstrapped with an in-memory stub connector
+  before each test that needs it (the real lifespan would try to connect
+  to PG / DuckDB / StarRocks).
+* ``run_agent_async`` is replaced with a fake coroutine that returns a
+  canned final state.
 * ``get_cursor`` (used by /api/history) is replaced with a fake context
   manager backed by an in-memory list of rows.
-* ``SchemaLoader`` is left untouched — it reads the real ``data_dictionary
-  .yaml`` from disk, which is fast and deterministic.
 
 Run with::
 
@@ -25,6 +27,9 @@ from fastapi.testclient import TestClient
 
 from src.api import history as history_module
 from src.api import query as query_module
+from src.api import schema as schema_module
+from src.connectors.base import QueryResult, TableMeta
+from src.connectors.registry import ConnectorRegistry
 from src.main import app
 
 
@@ -33,9 +38,61 @@ from src.main import app
 # ---------------------------------------------------------------------------
 
 
+class _StubConnector:
+    """Tiny in-memory stand-in for a real DataSourceConnector."""
+
+    def __init__(self, name: str = "stub_pg", dialect: str = "postgresql"):
+        self.name = name
+        self.dialect = dialect
+        self.description = f"stub source ({dialect})"
+        self._connected = True
+
+    def get_dialect(self) -> str:
+        return self.dialect
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    async def connect(self) -> None:
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        self._connected = False
+
+    async def test_connection(self) -> bool:
+        return True
+
+    async def execute_query(self, sql, timeout_seconds=30, max_rows=1000):
+        return QueryResult(success=True, columns=["x"], rows=[{"x": 1}], row_count=1, execution_time_ms=1, sql_executed=sql)
+
+    async def get_tables(self):
+        return [TableMeta(table_name="stub_table", schema_name="public", columns=[])]
+
+
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    """TestClient with a pre-populated ConnectorRegistry stub.
+
+    The real lifespan event would try to connect to PG / DuckDB / StarRocks;
+    we bypass it and inject an in-memory stub so /api/query, /api/schema, and
+    /api/datasources have something to look up.
+    """
+    from src.retrieval.schema_loader import SchemaLoader
+
+    ConnectorRegistry.reset_instance()
+    SchemaLoader.clear_cache()
+    registry = ConnectorRegistry.get_instance()
+    stub = _StubConnector()
+    registry._connectors["stub_pg"] = stub  # noqa: SLF001
+    registry._default_source = "stub_pg"  # noqa: SLF001
+    registry._raw_configs = [{"name": "stub_pg", "dialect": "postgresql", "overlay": None}]  # noqa: SLF001
+    registry._initialized = True  # noqa: SLF001
+
+    yield TestClient(app)
+
+    ConnectorRegistry.reset_instance()
+    SchemaLoader.clear_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -55,10 +112,18 @@ def test_healthz(client):
 
 
 def _fake_run_agent(*, success: bool = True, retries: int = 0) -> Any:
-    def _runner(user_query: str, session_id: str = "", sql_dialect: str = "postgresql"):
+    """Build a fake async ``run_agent_async`` returning canned final state."""
+
+    async def _runner(
+        user_query: str,
+        session_id: str = "",
+        sql_dialect: str = "postgresql",
+        active_source: str = "",
+    ):
         return {
             "user_query": user_query,
             "session_id": session_id,
+            "active_source": active_source,
             "intent": "aggregation",
             "retrieved_schemas": [{"table": "dwd_order_detail"}],
             "model_used": "fake-model",
@@ -93,14 +158,16 @@ def stub_persist(monkeypatch):
 
 class TestPostQuery:
     def test_success_response_shape(self, client, monkeypatch, stub_persist):
-        monkeypatch.setattr(query_module, "run_agent", _fake_run_agent(success=True))
+        monkeypatch.setattr(query_module, "run_agent_async", _fake_run_agent(success=True))
         resp = client.post(
             "/api/query",
-            json={"query": "按一级品类统计销售额", "session_id": "abc", "dialect": "postgresql"},
+            json={"query": "按一级品类统计销售额", "session_id": "abc"},
         )
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
+        assert body["source"] == "stub_pg"
+        assert body["dialect"] == "postgresql"
         assert body["intent"] == "aggregation"
         assert body["generated_sql"].startswith("SELECT")
         assert body["result"] == [{"category_l1": "电子产品", "sum": 99999}]
@@ -114,10 +181,12 @@ class TestPostQuery:
         assert stub_persist[0]["session_id"] == "abc"
 
     def test_failure_propagates_error(self, client, monkeypatch, stub_persist):
-        monkeypatch.setattr(query_module, "run_agent", _fake_run_agent(success=False, retries=3))
+        monkeypatch.setattr(
+            query_module, "run_agent_async", _fake_run_agent(success=False, retries=3)
+        )
         resp = client.post(
             "/api/query",
-            json={"query": "x", "session_id": "abc", "dialect": "postgresql"},
+            json={"query": "x", "session_id": "abc"},
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -126,36 +195,68 @@ class TestPostQuery:
         assert body["retry_count"] == 3
         assert body["result"] is None
 
-    def test_non_postgresql_dialect_rejected(self, client, monkeypatch, stub_persist):
-        # Should never reach run_agent
-        monkeypatch.setattr(
-            query_module,
-            "run_agent",
-            lambda **kw: pytest.fail("run_agent should not be called"),
-        )
-        resp = client.post(
-            "/api/query",
-            json={"query": "x", "dialect": "hiveql"},
-        )
-        # Pydantic Literal validation rejects unknown dialect at the request
-        # layer (422), before our 400 branch even fires.
-        assert resp.status_code in (400, 422)
+    def test_explicit_source_routes_correctly(self, client, monkeypatch, stub_persist):
+        captured: dict[str, str] = {}
+
+        async def _capture(user_query, session_id="", sql_dialect="postgresql", active_source=""):
+            captured["source"] = active_source
+            captured["dialect"] = sql_dialect
+            return {
+                "user_query": user_query,
+                "execution_success": True,
+                "row_count": 0,
+                "final_answer": "ok",
+                "retry_count": 0,
+                "latency_ms": 0,
+                "token_count": 0,
+            }
+
+        monkeypatch.setattr(query_module, "run_agent_async", _capture)
+        resp = client.post("/api/query", json={"query": "x", "source": "stub_pg"})
+        assert resp.status_code == 200
+        assert captured["source"] == "stub_pg"
+        assert captured["dialect"] == "postgresql"
+
+    def test_unknown_source_returns_400(self, client, stub_persist):
+        resp = client.post("/api/query", json={"query": "x", "source": "no_such_source"})
+        assert resp.status_code == 400
+        assert "no_such_source" in resp.json()["detail"]
 
     def test_empty_query_rejected_by_validation(self, client):
-        resp = client.post("/api/query", json={"query": "", "dialect": "postgresql"})
+        resp = client.post("/api/query", json={"query": ""})
         assert resp.status_code == 422  # Pydantic min_length=1
 
     def test_agent_exception_returns_500(self, client, monkeypatch, stub_persist):
-        def boom(**kwargs):
+        async def boom(**kwargs):
             raise RuntimeError("agent crashed")
 
-        monkeypatch.setattr(query_module, "run_agent", boom)
+        monkeypatch.setattr(query_module, "run_agent_async", boom)
         resp = client.post(
             "/api/query",
-            json={"query": "x", "dialect": "postgresql"},
+            json={"query": "x"},
         )
         assert resp.status_code == 500
         assert "agent" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/datasources
+# ---------------------------------------------------------------------------
+
+
+class TestGetDatasources:
+    def test_lists_registered_sources(self, client):
+        resp = client.get("/api/datasources")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["default"] == "stub_pg"
+        names = [d["name"] for d in body["datasources"]]
+        assert "stub_pg" in names
+        stub_entry = next(d for d in body["datasources"] if d["name"] == "stub_pg")
+        assert stub_entry["dialect"] == "postgresql"
+        assert stub_entry["connected"] is True
+        assert stub_entry["table_count"] == 1
+        assert stub_entry["is_default"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -164,33 +265,23 @@ class TestPostQuery:
 
 
 class TestGetSchema:
-    def test_returns_three_layers(self, client):
+    def test_returns_default_source_schema(self, client):
         resp = client.get("/api/schema")
         assert resp.status_code == 200
         body = resp.json()
-        layers = body["layers"]
-        # Phase 1 dictionary defines ODS, DWD, DWS
-        assert {"ODS", "DWD", "DWS"} <= set(layers.keys())
+        # The stub connector exposes a single un-layered table → "OTHER" bucket
+        assert "layers" in body
+        all_tables = [t for tables in body["layers"].values() for t in tables]
+        names = {t["table"] for t in all_tables}
+        assert "stub_table" in names
 
-    def test_does_not_expose_system_layer(self, client):
-        resp = client.get("/api/schema")
-        body = resp.json()
-        assert "SYSTEM" not in body["layers"]
-        # query_history (the only SYSTEM table) shouldn't appear anywhere
-        for tables in body["layers"].values():
-            for tbl in tables:
-                assert tbl["table"] != "query_history"
-                assert tbl["table"] != "schema_embeddings"
+    def test_unknown_source_returns_400(self, client):
+        resp = client.get("/api/schema?source=no_such_source")
+        assert resp.status_code == 400
 
-    def test_dwd_order_detail_columns_present(self, client):
-        resp = client.get("/api/schema")
-        body = resp.json()
-        dwd_tables = body["layers"]["DWD"]
-        names = {t["table"] for t in dwd_tables}
-        assert "dwd_order_detail" in names
-        order_detail = next(t for t in dwd_tables if t["table"] == "dwd_order_detail")
-        col_names = {c["name"] for c in order_detail["columns"]}
-        assert {"order_id", "total_amount", "category_l1"} <= col_names
+    def test_explicit_source_param_routes(self, client):
+        resp = client.get("/api/schema?source=stub_pg")
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

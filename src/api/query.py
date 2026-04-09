@@ -1,10 +1,10 @@
 """POST /api/query — run a natural-language query through the agent.
 
 Pipeline:
-    1. Validate the request
-    2. Invoke ``run_agent`` (which compiles & runs the LangGraph state machine)
-    3. Persist the run to ``query_history`` (best effort — never blocks the response)
-    4. Map ``AgentState`` → ``QueryResponse``
+    1. Validate the request, resolve target data source via ConnectorRegistry.
+    2. Invoke ``run_agent_async`` with the resolved source name + dialect.
+    3. Persist the run to ``query_history`` (best effort — never blocks the response).
+    4. Map ``AgentState`` → ``QueryResponse``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from src.agent.graph import run_agent
+from src.agent.graph import run_agent_async
+from src.connectors.registry import ConnectorRegistry
 from src.db.connection import get_cursor
 from src.models.request import QueryRequest
 from src.models.response import QueryResponse
@@ -53,19 +54,38 @@ def _persist_history(state: dict[str, Any]) -> None:
 
 
 @router.post("/query", response_model=QueryResponse)
-def post_query(req: QueryRequest) -> QueryResponse:
-    if req.dialect != "postgresql":
-        # Phase 1 only ships PostgreSQL; HiveQL/SparkSQL come in Phase 2 §7.3
+async def post_query(req: QueryRequest) -> QueryResponse:
+    registry = ConnectorRegistry.get_instance()
+    if not registry.is_initialized:
+        raise HTTPException(
+            status_code=503,
+            detail="connector registry not initialized",
+        )
+
+    # Resolve target source: explicit > default
+    source_name = req.source or registry.default_name()
+    if not source_name:
         raise HTTPException(
             status_code=400,
-            detail=f"dialect '{req.dialect}' is not supported in Phase 1",
+            detail="no `source` given and no default_source configured",
         )
 
     try:
-        final_state = run_agent(
+        connector = registry.get(source_name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    dialect = connector.get_dialect()
+
+    try:
+        final_state = await run_agent_async(
             user_query=req.query,
             session_id=req.session_id or "",
-            sql_dialect=req.dialect,
+            sql_dialect=dialect,
+            active_source=source_name,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("agent run failed")
@@ -76,6 +96,8 @@ def post_query(req: QueryRequest) -> QueryResponse:
     return QueryResponse(
         success=bool(final_state.get("execution_success", False)),
         query=req.query,
+        source=source_name,
+        dialect=dialect,
         intent=final_state.get("intent"),
         generated_sql=final_state.get("generated_sql"),
         result=final_state.get("execution_result"),

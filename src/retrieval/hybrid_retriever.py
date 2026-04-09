@@ -51,6 +51,12 @@ class HybridRetriever:
     The vector retriever is optional at runtime — if it raises (e.g. no DB,
     no embeddings indexed, no API key), we degrade gracefully to BM25-only.
     This makes local dev and unit tests work without standing up Postgres.
+
+    Phase 2: each retriever instance is bound to a single ``source_name``.
+    The schema retrieval node maintains one retriever per source via
+    ``functools.lru_cache``. BM25 indexes the per-source ``TableInfo`` list
+    that came out of ``SchemaLoader.load_from_connector``; vector search
+    filters ``schema_embeddings.source_name`` to the same source.
     """
 
     def __init__(
@@ -59,11 +65,29 @@ class HybridRetriever:
         embedder: Embedder | None = None,
         bm25_weight: float | None = None,
         vector_weight: float | None = None,
+        *,
+        source_name: str | None = None,
+        tables: list[TableInfo] | None = None,
     ):
+        self.source_name = source_name
         self.loader = loader or SchemaLoader()
-        self.tables = [
-            t for t in self.loader.load() if t.layer not in EXCLUDED_LAYERS
-        ]
+
+        if tables is not None:
+            # Caller already loaded tables (e.g. from a connector). Use as-is.
+            source_tables = tables
+        elif source_name is not None:
+            cached = SchemaLoader.get_cached(source_name)
+            if cached is None:
+                raise RuntimeError(
+                    f"no cached schema for source {source_name!r}; "
+                    f"call SchemaLoader.load_from_connector() first"
+                )
+            source_tables = cached
+        else:
+            # Legacy YAML path
+            source_tables = self.loader.load()
+
+        self.tables = [t for t in source_tables if t.layer not in EXCLUDED_LAYERS]
         self.table_lookup: dict[str, TableInfo] = {t.name: t for t in self.tables}
         self.bm25 = BM25Index(self.tables)
         self.embedder = embedder or Embedder()
@@ -83,7 +107,9 @@ class HybridRetriever:
         # 2. Vector retrieval — degrade gracefully if unavailable
         vector_scores: dict[str, float] = {}
         try:
-            for name, score in self.embedder.search(query, top_n=20):
+            for name, score in self.embedder.search(
+                query, top_n=20, source_name=self.source_name
+            ):
                 if name in self.table_lookup:
                     vector_scores[name] = score
         except Exception as exc:  # noqa: BLE001 — intentional broad fallback

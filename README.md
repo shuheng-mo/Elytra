@@ -11,7 +11,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-latest-1c3d5a.svg)](https://github.com/langchain-ai/langgraph)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791.svg)](https://github.com/pgvector/pgvector)
-[![Tests](https://img.shields.io/badge/tests-75%2F75%20passing-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-109%2F109%20passing-brightgreen.svg)](#测试)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 [简体中文](README.md) | [English](README_EN.md)
@@ -25,6 +25,7 @@
 - [项目简介](#项目简介)
 - [核心特性](#核心特性)
 - [系统架构](#系统架构)
+- [支持的数据源](#支持的数据源)
 - [技术栈](#技术栈)
 - [快速开始](#快速开始)
 - [项目结构](#项目结构)
@@ -142,18 +143,91 @@ flowchart TB
 
 ---
 
+## 支持的数据源
+
+Elytra 通过可插拔的 **DataSource Connector** 抽象层支持多种数据库引擎。新增数据源
+只需实现 `DataSourceConnector` 接口（约 100 行）并在 `config/datasources.yaml`
+添加一段配置——无需改动 agent / 检索 / API 任何核心代码。
+
+| 引擎 | 状态 | 用途 |
+|:---|:---|:---|
+| **PostgreSQL** | ✅ 内置 | 默认电商数仓（ODS / DWD / DWS 三层模型）|
+| **DuckDB** | ✅ 内置 | 嵌入式 OLAP — 含 TPC-H 标准数据集与 Brazilian Olist 真实数据集 |
+| **StarRocks** | ✅ 可选 | 高性能 OLAP，MySQL 协议兼容，独立 docker compose |
+
+详细的连接器接口在 `src/connectors/base.py::DataSourceConnector`，每个 connector
+都通过 `config/datasources.yaml` 中的一个 YAML 块描述：
+
+```yaml
+default_source: ecommerce_pg
+
+datasources:
+  - name: ecommerce_pg
+    dialect: postgresql
+    description: "电商模拟数仓"
+    connection:
+      host: ${DB_HOST:-localhost}
+      port: ${DB_PORT:-5432}
+      database: Elytra
+    overlay: db/data_dictionary.yaml      # 中文字段描述（可选）
+
+  - name: tpch_duckdb
+    dialect: duckdb
+    description: "TPC-H 标准测试数据集"
+    connection:
+      database_path: ./datasets/tpch/tpch.duckdb
+    overlay: config/overlays/tpch_duckdb.yaml
+```
+
+API 调用时通过 `source` 字段指定数据源（省略则用 `default_source`）：
+
+```bash
+curl -X POST localhost:8000/api/query -d '{
+  "query": "上个月销售额最高的品类",
+  "source": "tpch_duckdb"
+}'
+```
+
+`GET /api/datasources` 列出全部已配置数据源及其连接状态。
+
+### 快速体验：TPC-H
+
+```bash
+python datasets/tpch/load_tpch.py                    # 生成 SF=0.1 DuckDB（无需下载）
+python -m src.retrieval.bootstrap --source tpch_duckdb
+# 然后用 source=tpch_duckdb 提问
+```
+
+### 快速体验：Brazilian E-Commerce
+
+```bash
+# 1) 从 Kaggle 下载 https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
+#    解压到 datasets/brazilian_ecommerce/csv/
+python datasets/brazilian_ecommerce/load_brazilian.py
+python -m src.retrieval.bootstrap --source brazilian_ecommerce
+```
+
+### 启用 StarRocks（可选）
+
+```bash
+docker compose -f docker/starrocks/docker-compose.starrocks.yml up -d
+# 详见 docker/starrocks/README.md
+```
+
+---
+
 ## 技术栈
 
 | 层 | 技术 |
 |:---|:---|
 | 语言 | Python ≥ 3.11 |
-| 数据库 | PostgreSQL 16 + [pgvector](https://github.com/pgvector/pgvector) |
+| 数据库 | PostgreSQL 16 + [pgvector](https://github.com/pgvector/pgvector) / DuckDB / StarRocks（可选） |
 | LLM 框架 | [LangChain](https://github.com/langchain-ai/langchain) + [LangGraph](https://github.com/langchain-ai/langgraph) |
 | 后端 | [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) + [Pydantic v2](https://docs.pydantic.dev/latest/) |
 | 前端 | [Streamlit](https://streamlit.io/) ≥ 1.35 |
 | BM25 | [rank-bm25](https://github.com/dorianbrown/rank_bm25) |
 | Embedding | OpenAI / OpenRouter / [sentence-transformers](https://www.sbert.net/) |
-| 数据库驱动 | psycopg2-binary |
+| 数据库驱动 | psycopg2-binary / asyncpg / duckdb / aiomysql |
 | 容器化 | Docker + Docker Compose |
 | 包管理 | [uv](https://github.com/astral-sh/uv)（推荐） |
 | 测试 | pytest + httpx TestClient |
@@ -246,44 +320,65 @@ Elytra/
 ├── pyproject.toml                 # uv / pip 依赖 + ruff 配置
 ├── .env.example                   # API key + 模型 + 检索权重模板
 │
+├── config/
+│   ├── datasources.yaml           # 多数据源注册表（PG / DuckDB / StarRocks）
+│   └── overlays/                  # 各数据源的 schema 富化 YAML
+│
 ├── db/
 │   ├── init.sql                   # PG 初始化（11 张业务表 + 2 张系统表）
 │   ├── seed_data.sql              # 模拟数据
-│   └── data_dictionary.yaml       # 数据字典（中英双语）
+│   └── data_dictionary.yaml       # 数据字典（中英双语，同时作为 ecommerce_pg 的 overlay）
+│
+├── datasets/
+│   ├── tpch/load_tpch.py          # DuckDB TPC-H 生成器（内置 dbgen）
+│   └── brazilian_ecommerce/       # Olist Kaggle CSV → DuckDB 加载脚本
+│
+├── docker/
+│   └── starrocks/                 # 可选 StarRocks docker compose + README
 │
 ├── src/
 │   ├── config.py                  # 全局配置（环境变量读取）
-│   ├── main.py                    # FastAPI 入口
+│   ├── main.py                    # FastAPI 入口（含 connector lifespan）
 │   │
 │   ├── models/
-│   │   ├── request.py             # QueryRequest
-│   │   ├── response.py            # QueryResponse / SchemaResponse / HistoryResponse
-│   │   └── state.py               # AgentState (LangGraph)
+│   │   ├── request.py             # QueryRequest（含 source 字段）
+│   │   ├── response.py            # QueryResponse / SchemaResponse / DataSourcesResponse / ...
+│   │   └── state.py               # AgentState（含 active_source）
+│   │
+│   ├── connectors/                # 新增：可插拔数据源连接层
+│   │   ├── base.py                # DataSourceConnector ABC + 数据类 + 安全过滤
+│   │   ├── postgres_connector.py  # asyncpg
+│   │   ├── duckdb_connector.py    # 嵌入式 DuckDB
+│   │   ├── starrocks_connector.py # aiomysql (StarRocks MySQL 协议)
+│   │   ├── factory.py             # dialect → 类，懒导入可选驱动
+│   │   ├── registry.py            # 单例 + init_from_yaml + 环境变量展开
+│   │   └── overlay.py             # TableMeta + YAML overlay → TableInfo
 │   │
 │   ├── db/
-│   │   ├── connection.py          # psycopg2 上下文管理器
-│   │   └── executor.py            # SELECT-only 安全过滤 + 超时
+│   │   ├── connection.py          # psycopg2 上下文管理器（仅服务基础设施 DB）
+│   │   └── executor.py            # 兼容 shim（重导出 + 同步 wrapper）
 │   │
 │   ├── retrieval/
-│   │   ├── schema_loader.py       # YAML → TableInfo
+│   │   ├── schema_loader.py       # YAML loader + load_from_connector + per-source 缓存
 │   │   ├── bm25_index.py          # CJK + Latin tokenizer + BM25Okapi
-│   │   ├── embedder.py            # OpenAI / OpenRouter / 本地三后端
-│   │   ├── hybrid_retriever.py    # BM25 + 向量混合
+│   │   ├── embedder.py            # OpenAI / OpenRouter / 本地三后端 + source 维度索引
+│   │   ├── hybrid_retriever.py    # 单源 BM25 + 向量混合
 │   │   ├── reranker.py            # LLM-as-Reranker
-│   │   └── bootstrap.py           # 一次性初始化 schema_embeddings
+│   │   └── bootstrap.py           # 多源 bootstrap（--source 单源重建）
 │   │
 │   ├── agent/
-│   │   ├── graph.py               # LangGraph 状态机
+│   │   ├── graph.py               # LangGraph 状态机 + run_agent_async
 │   │   ├── llm.py                 # OpenRouter-first chat 调用
-│   │   ├── nodes/                 # 6 个节点
-│   │   └── prompts/               # intent / sql_generation / self_correction / reranking
+│   │   ├── nodes/                 # 6 个节点（sql_executor 已改 async）
+│   │   └── prompts/               # intent / sql_generation（含 DIALECT_INSTRUCTIONS） / ...
 │   │
 │   ├── router/
 │   │   └── model_router.py        # 规则引擎：cheap / strong 模型路由
 │   │
 │   └── api/
-│       ├── query.py               # POST /api/query
-│       ├── schema.py              # GET  /api/schema
+│       ├── query.py               # POST /api/query（async，source-aware）
+│       ├── schema.py              # GET  /api/schema?source=
+│       ├── datasources.py         # GET  /api/datasources（新）
 │       └── history.py             # GET  /api/history
 │
 ├── eval/
@@ -292,9 +387,10 @@ Elytra/
 │   └── results/                   # 评估报告输出
 │
 ├── tests/
+│   ├── test_connectors.py         # 32 case — 连接器层
 │   ├── test_retrieval.py          # 20 case
 │   ├── test_agent.py              # 41 case
-│   └── test_api.py                # 14 case
+│   └── test_api.py                # 16 case
 │
 ├── assets/                        # 项目 logo
 └── README.md
@@ -342,6 +438,20 @@ Elytra/
 | `MAX_RETRY_COUNT` | `3` | 自修正最大重试次数 |
 | `SQL_TIMEOUT_SECONDS` | `30` | 单条 SQL 的 `statement_timeout` |
 
+### 数据源
+
+| 变量 | 默认 | 说明 |
+|:---|:---|:---|
+| `DEFAULT_SOURCE` | _(空 → 读 YAML)_ | 覆盖 YAML 中的 `default_source`，值必须匹配 `config/datasources.yaml` 中的 `name:` |
+
+`config/datasources.yaml` 自身支持 `${VAR:-default}` 占位符，环境相关的覆盖
+建议放在 `.env`：
+
+| 变量 | 用于 | 默认 |
+|:---|:---|:---|
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `ecommerce_pg` 连接块 | `localhost` / `5432` / `Elytra` / `Elytra` / `Elytra_dev` |
+| `STARROCKS_HOST` / `STARROCKS_PORT` / `STARROCKS_DB` / `STARROCKS_USER` / `STARROCKS_PASSWORD` | `ecommerce_starrocks` 连接块 | `localhost` / `9030` / `elytra` / `root` / `(空)` |
+
 ---
 
 ## API 文档
@@ -354,9 +464,13 @@ Elytra/
 {
   "query": "上个月销售额最高的商品品类是什么",
   "session_id": "optional-session-id",
-  "dialect": "postgresql"
+  "source": "ecommerce_pg"
 }
 ```
+
+`source` 可省略，省略时使用 `config/datasources.yaml` 中的 `default_source`。
+SQL 方言会从 source 背后的 connector 自动派生，旧的 `dialect` 字段保留兼容
+但已被忽略。
 
 响应：
 
@@ -364,6 +478,8 @@ Elytra/
 {
   "success": true,
   "query": "上个月销售额最高的商品品类是什么",
+  "source": "ecommerce_pg",
+  "dialect": "postgresql",
   "intent": "aggregation",
   "generated_sql": "SELECT category_l1, SUM(total_amount) AS total_sales FROM dwd_order_detail ...",
   "result": [
@@ -379,9 +495,40 @@ Elytra/
 }
 ```
 
-### `GET /api/schema`
+### `GET /api/datasources`
 
-返回按层级分组的数据字典（`ODS` / `DWD` / `DWS`），SYSTEM 层不暴露。
+列出所有已注册的数据源连接器：
+
+```json
+{
+  "datasources": [
+    {
+      "name": "ecommerce_pg",
+      "dialect": "postgresql",
+      "description": "电商模拟数仓 (ODS / DWD / DWS)",
+      "connected": true,
+      "table_count": 13,
+      "is_default": true
+    },
+    {
+      "name": "tpch_duckdb",
+      "dialect": "duckdb",
+      "description": "TPC-H 标准测试数据集",
+      "connected": true,
+      "table_count": 8,
+      "is_default": false
+    }
+  ],
+  "default": "ecommerce_pg"
+}
+```
+
+`connected: false` 表示该数据源在启动时无法 ping 通——其余数据源仍然可用。
+
+### `GET /api/schema?source=<name>`
+
+返回单个数据源的 schema，按数仓层（`ODS` / `DWD` / `DWS`，没有层级前缀的进入
+`OTHER` 桶）分组。`?source=` 显式指定数据源，省略时使用默认。SYSTEM 层不暴露。
 
 ### `GET /api/history?session_id=xxx&limit=20`
 
@@ -428,26 +575,33 @@ python eval/run_eval.py --api-url http://localhost:8000 --filter aggregation
 .venv/bin/python -m pytest tests/test_agent.py -v
 ```
 
-当前 **75 / 75 passing**，0.8 秒跑完。覆盖：
+当前 **109 / 109 passing**，约 1 秒跑完。覆盖：
 
+- `test_connectors.py`（32 cases）— SQL 安全过滤迁移、`ColumnMeta`/`TableMeta`/`QueryResult` 数据契约、`ConnectorFactory` 懒加载与 dialect 路由、`ConnectorRegistry` 单例 + `${VAR:-default}` 环境变量展开、`enrich_with_overlay` 双 YAML 结构兼容
 - `test_retrieval.py`（20 cases）— tokenizer、BM25、min-max 归一化、HybridRetriever 分数融合、向量降级、真实数据字典 smoke
-- `test_agent.py`（41 cases）— SQL 安全过滤、模型路由全分支、节点行为、graph 端到端（成功 / 重试成功 / 重试耗尽 / 澄清短路）
-- `test_api.py`（14 cases）— `/healthz`、`/api/query`（成功 / 失败 / 方言拒绝 / 空查询 / agent 异常 500）、`/api/schema`、`/api/history`
+- `test_agent.py`（41 cases）— SQL 安全过滤、模型路由全分支、节点行为（含 stub connector 注入）、graph 端到端（成功 / 重试成功 / 重试耗尽 / 澄清短路）
+- `test_api.py`（16 cases）— `/healthz`、`/api/query`（成功 / 失败 / 显式 source / 未知 source / 空查询 / agent 异常 500）、`/api/datasources`、`/api/schema?source=`、`/api/history`
 
-测试不依赖真实 DB 或 LLM — 全部通过 monkey-patching stub 完成，本地可秒过。
+测试不依赖真实 DB 或 LLM — 通过 stub connector + 内存 registry 完成，本地可秒过。
 
 ---
 
 ## Roadmap
+
+已完成（v0.2.0）：
+
+- [x] **多数据源抽象层** — `DataSourceConnector` async ABC，PG / DuckDB / StarRocks 三引擎，YAML 驱动配置
+- [x] **TPC-H 与 Brazilian E-Commerce 数据集** — DuckDB 内置 dbgen + Kaggle CSV 加载脚本
+- [x] **方言自适应 SQL 生成** — `DIALECT_INSTRUCTIONS` 按目标引擎切换语法规则
+- [x] **asyncpg 连接池** — agent 热路径全链路 async
 
 下一阶段主要特性：
 
 - [ ] **多轮对话** — `conversation_history` + 上下文摘要 + 指代消解
 - [ ] **本地 reranker** — `bge-reranker-v2-m3` 替代 LLM-as-Reranker，加字段级检索
 - [ ] **流式 SSE 端点** — `POST /api/query/stream`，前端展示 Agent 思考过程
-- [ ] **HiveQL / SparkSQL 方言** — 切换 prompt 模板和语法校验
 - [ ] **Tool-use Agent** — 升级为 function-calling 模式
-- [ ] **可观测性** — 结构化 trace、token 成本追踪、错误分类、asyncpg 池
+- [ ] **可观测性** — 结构化 trace、token 成本追踪、错误分类、prompt 注入加固
 
 ---
 

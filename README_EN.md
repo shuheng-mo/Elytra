@@ -11,7 +11,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-latest-1c3d5a.svg)](https://github.com/langchain-ai/langgraph)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791.svg)](https://github.com/pgvector/pgvector)
-[![Tests](https://img.shields.io/badge/tests-75%2F75%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-109%2F109%20passing-brightgreen.svg)](#testing)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 [English](README_EN.md) | [简体中文](README.md)
@@ -25,6 +25,7 @@
 - [Overview](#overview)
 - [Key Features](#key-features)
 - [Architecture](#architecture)
+- [Supported Data Sources](#supported-data-sources)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
@@ -144,18 +145,93 @@ flowchart TB
 
 ---
 
+## Supported Data Sources
+
+Elytra ships a pluggable **DataSource Connector** layer. Adding a new SQL
+engine takes ~100 lines of code (one `DataSourceConnector` subclass) plus a
+YAML config block — no changes to the agent, retrieval, or API layers.
+
+| Engine | Status | Use case |
+|:---|:---|:---|
+| **PostgreSQL** | ✅ Built-in | Default e-commerce warehouse with three layers (ODS / DWD / DWS) |
+| **DuckDB** | ✅ Built-in | Embedded OLAP — bundled TPC-H generator + Brazilian Olist real-world dataset |
+| **StarRocks** | ✅ Optional | High-performance OLAP, MySQL-compatible protocol, separate docker compose |
+
+The connector contract lives in `src/connectors/base.py::DataSourceConnector`.
+Each source is described by one YAML block in `config/datasources.yaml`:
+
+```yaml
+default_source: ecommerce_pg
+
+datasources:
+  - name: ecommerce_pg
+    dialect: postgresql
+    description: "E-commerce simulated warehouse"
+    connection:
+      host: ${DB_HOST:-localhost}
+      port: ${DB_PORT:-5432}
+      database: Elytra
+    overlay: db/data_dictionary.yaml         # optional Chinese metadata
+
+  - name: tpch_duckdb
+    dialect: duckdb
+    description: "TPC-H standard test dataset"
+    connection:
+      database_path: ./datasets/tpch/tpch.duckdb
+    overlay: config/overlays/tpch_duckdb.yaml
+```
+
+API requests pick a source via the `source` field (omit it to use
+`default_source`):
+
+```bash
+curl -X POST localhost:8000/api/query -d '{
+  "query": "Top product category by sales last month",
+  "source": "tpch_duckdb"
+}'
+```
+
+`GET /api/datasources` lists every configured source with its connection
+state and table count.
+
+### Quick start: TPC-H
+
+```bash
+python datasets/tpch/load_tpch.py                    # SF=0.1 DuckDB (no download)
+python -m src.retrieval.bootstrap --source tpch_duckdb
+# then ask with source=tpch_duckdb
+```
+
+### Quick start: Brazilian E-Commerce
+
+```bash
+# 1) Download from https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
+#    Unzip into datasets/brazilian_ecommerce/csv/
+python datasets/brazilian_ecommerce/load_brazilian.py
+python -m src.retrieval.bootstrap --source brazilian_ecommerce
+```
+
+### Enable StarRocks (optional)
+
+```bash
+docker compose -f docker/starrocks/docker-compose.starrocks.yml up -d
+# See docker/starrocks/README.md for the BE registration step
+```
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
 |:---|:---|
 | Language | Python ≥ 3.11 |
-| Database | PostgreSQL 16 + [pgvector](https://github.com/pgvector/pgvector) |
+| Database | PostgreSQL 16 + [pgvector](https://github.com/pgvector/pgvector) / DuckDB / StarRocks (optional) |
 | LLM framework | [LangChain](https://github.com/langchain-ai/langchain) + [LangGraph](https://github.com/langchain-ai/langgraph) |
 | Backend | [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) + [Pydantic v2](https://docs.pydantic.dev/latest/) |
 | Frontend | [Streamlit](https://streamlit.io/) ≥ 1.35 |
 | BM25 | [rank-bm25](https://github.com/dorianbrown/rank_bm25) |
 | Embeddings | OpenAI / OpenRouter / [sentence-transformers](https://www.sbert.net/) |
-| DB driver | psycopg2-binary |
+| DB drivers | psycopg2-binary / asyncpg / duckdb / aiomysql |
 | Containers | Docker + Docker Compose |
 | Package manager | [uv](https://github.com/astral-sh/uv) (recommended) |
 | Testing | pytest + httpx TestClient |
@@ -249,44 +325,65 @@ Elytra/
 ├── pyproject.toml                 # uv / pip deps + ruff config
 ├── .env.example                   # API key + model + retrieval template
 │
+├── config/
+│   ├── datasources.yaml           # multi-source registry (PG / DuckDB / StarRocks)
+│   └── overlays/                  # per-source schema enrichment YAML
+│
 ├── db/
 │   ├── init.sql                   # PG schema (11 business + 2 system tables)
 │   ├── seed_data.sql              # simulated data
-│   └── data_dictionary.yaml       # bilingual data dictionary
+│   └── data_dictionary.yaml       # bilingual data dictionary (also used as ecommerce_pg overlay)
+│
+├── datasets/
+│   ├── tpch/load_tpch.py          # DuckDB TPC-H generator (built-in dbgen)
+│   └── brazilian_ecommerce/       # Olist Kaggle CSV → DuckDB loader
+│
+├── docker/
+│   └── starrocks/                 # optional StarRocks docker compose + README
 │
 ├── src/
 │   ├── config.py                  # global config (env vars)
-│   ├── main.py                    # FastAPI entrypoint
+│   ├── main.py                    # FastAPI entrypoint with connector lifespan
 │   │
 │   ├── models/
-│   │   ├── request.py             # QueryRequest
-│   │   ├── response.py            # QueryResponse / SchemaResponse / HistoryResponse
-│   │   └── state.py               # AgentState (LangGraph)
+│   │   ├── request.py             # QueryRequest (with `source` field)
+│   │   ├── response.py            # QueryResponse / SchemaResponse / DataSourcesResponse / ...
+│   │   └── state.py               # AgentState (with `active_source`)
+│   │
+│   ├── connectors/                # NEW: pluggable data source layer
+│   │   ├── base.py                # DataSourceConnector ABC + dataclasses + safety filter
+│   │   ├── postgres_connector.py  # asyncpg
+│   │   ├── duckdb_connector.py    # embedded DuckDB
+│   │   ├── starrocks_connector.py # aiomysql (StarRocks MySQL protocol)
+│   │   ├── factory.py             # dialect → class with lazy import
+│   │   ├── registry.py            # singleton, init_from_yaml, env-var expansion
+│   │   └── overlay.py             # TableMeta + YAML overlay → TableInfo
 │   │
 │   ├── db/
-│   │   ├── connection.py          # psycopg2 context managers
-│   │   └── executor.py            # SELECT-only safety filter + timeout
+│   │   ├── connection.py          # psycopg2 context managers (infra DB only)
+│   │   └── executor.py            # legacy shim (re-exports + sync wrapper)
 │   │
 │   ├── retrieval/
-│   │   ├── schema_loader.py       # YAML → TableInfo
+│   │   ├── schema_loader.py       # YAML loader + load_from_connector + per-source cache
 │   │   ├── bm25_index.py          # CJK + Latin tokenizer + BM25Okapi
-│   │   ├── embedder.py            # OpenAI / OpenRouter / local backends
-│   │   ├── hybrid_retriever.py    # BM25 + vector fusion
+│   │   ├── embedder.py            # OpenAI / OpenRouter / local backends + source-discriminated index
+│   │   ├── hybrid_retriever.py    # source-bound BM25 + vector fusion
 │   │   ├── reranker.py            # LLM-as-Reranker
-│   │   └── bootstrap.py           # one-shot schema_embeddings init
+│   │   └── bootstrap.py           # multi-source bootstrap (--source flag)
 │   │
 │   ├── agent/
-│   │   ├── graph.py               # LangGraph state machine
+│   │   ├── graph.py               # LangGraph state machine + run_agent_async
 │   │   ├── llm.py                 # OpenRouter-first chat helper
-│   │   ├── nodes/                 # 6 nodes
-│   │   └── prompts/               # intent / sql_generation / self_correction / reranking
+│   │   ├── nodes/                 # 6 nodes (sql_executor is async)
+│   │   └── prompts/               # intent / sql_generation (with DIALECT_INSTRUCTIONS) / ...
 │   │
 │   ├── router/
 │   │   └── model_router.py        # rule engine: cheap / strong routing
 │   │
 │   └── api/
-│       ├── query.py               # POST /api/query
-│       ├── schema.py              # GET  /api/schema
+│       ├── query.py               # POST /api/query (async, source-aware)
+│       ├── schema.py              # GET  /api/schema?source=
+│       ├── datasources.py         # GET  /api/datasources (NEW)
 │       └── history.py             # GET  /api/history
 │
 ├── eval/
@@ -295,9 +392,10 @@ Elytra/
 │   └── results/                   # report output dir
 │
 ├── tests/
+│   ├── test_connectors.py         # 32 cases — connector layer
 │   ├── test_retrieval.py          # 20 cases
 │   ├── test_agent.py              # 41 cases
-│   └── test_api.py                # 14 cases
+│   └── test_api.py                # 16 cases
 │
 ├── assets/                        # project logo
 └── README.md
@@ -348,6 +446,20 @@ See [`.env.example`](.env.example) for the full list.
 | `MAX_RETRY_COUNT` | `3` | Self-correction retry budget |
 | `SQL_TIMEOUT_SECONDS` | `30` | Per-statement `statement_timeout` |
 
+### Data sources
+
+| Variable | Default | Notes |
+|:---|:---|:---|
+| `DEFAULT_SOURCE` | _(unset → reads from YAML)_ | Override for the YAML's `default_source`; the value must match a `name:` in `config/datasources.yaml` |
+
+`config/datasources.yaml` itself supports `${VAR:-default}` placeholders for
+host/port/credentials, so per-environment overrides go in `.env`:
+
+| Variable | Used by | Default |
+|:---|:---|:---|
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `ecommerce_pg` connection block | `localhost` / `5432` / `Elytra` / `Elytra` / `Elytra_dev` |
+| `STARROCKS_HOST` / `STARROCKS_PORT` / `STARROCKS_DB` / `STARROCKS_USER` / `STARROCKS_PASSWORD` | `ecommerce_starrocks` connection block | `localhost` / `9030` / `elytra` / `root` / `(empty)` |
+
 ---
 
 ## API Reference
@@ -360,9 +472,14 @@ Request:
 {
   "query": "Which product category had the highest sales last month?",
   "session_id": "optional-session-id",
-  "dialect": "postgresql"
+  "source": "ecommerce_pg"
 }
 ```
+
+`source` is optional and falls back to `default_source` from
+`config/datasources.yaml`. The dialect is automatically derived from the
+connector behind the source — the legacy `dialect` field is still accepted
+but ignored.
 
 Response:
 
@@ -370,6 +487,8 @@ Response:
 {
   "success": true,
   "query": "Which product category had the highest sales last month?",
+  "source": "ecommerce_pg",
+  "dialect": "postgresql",
   "intent": "aggregation",
   "generated_sql": "SELECT category_l1, SUM(total_amount) AS total_sales FROM dwd_order_detail ...",
   "result": [
@@ -385,9 +504,43 @@ Response:
 }
 ```
 
-### `GET /api/schema`
+### `GET /api/datasources`
 
-Returns the data dictionary grouped by warehouse layer (`ODS` / `DWD` / `DWS`). The SYSTEM layer is hidden.
+Lists every connector registered with `ConnectorRegistry`:
+
+```json
+{
+  "datasources": [
+    {
+      "name": "ecommerce_pg",
+      "dialect": "postgresql",
+      "description": "E-commerce simulated warehouse (ODS / DWD / DWS)",
+      "connected": true,
+      "table_count": 13,
+      "is_default": true
+    },
+    {
+      "name": "tpch_duckdb",
+      "dialect": "duckdb",
+      "description": "TPC-H standard test dataset",
+      "connected": true,
+      "table_count": 8,
+      "is_default": false
+    }
+  ],
+  "default": "ecommerce_pg"
+}
+```
+
+`connected: false` means the connector failed its startup ping — the rest of
+the registry still comes up so other sources stay queryable.
+
+### `GET /api/schema?source=<name>`
+
+Returns the schema for one data source, grouped by warehouse layer (`ODS` /
+`DWD` / `DWS`, plus `OTHER` for sources without layer prefixes). Pass
+`?source=` to pick a specific source; omit it for the default. The SYSTEM
+layer is always hidden.
 
 ### `GET /api/history?session_id=xxx&limit=20`
 
@@ -436,26 +589,33 @@ per-case detail.
 .venv/bin/python -m pytest tests/test_agent.py -v
 ```
 
-Currently **75 / 75 passing** in 0.8 s. Coverage:
+Currently **109 / 109 passing** in ~1 s. Coverage:
 
+- `test_connectors.py` (32 cases) — SQL safety filter migration, `ColumnMeta`/`TableMeta`/`QueryResult` data contracts, `ConnectorFactory` lazy import + dialect routing, `ConnectorRegistry` singleton + `${VAR:-default}` env-var expansion, `enrich_with_overlay` for both YAML structures
 - `test_retrieval.py` (20 cases) — tokenizer, BM25, min-max normalization, `HybridRetriever` score fusion, vector-failure fallback, real data dictionary smoke test
-- `test_agent.py` (41 cases) — SQL safety filter, model routing (every branch), node behavior, full graph end-to-end (success / retry-then-success / retry exhaustion / clarification short-circuit)
-- `test_api.py` (14 cases) — `/healthz`, `/api/query` (success / failure / dialect rejection / empty / agent crash 500), `/api/schema`, `/api/history`
+- `test_agent.py` (41 cases) — SQL safety filter, model routing (every branch), node behavior (with stub-connector injection), full graph end-to-end (success / retry-then-success / retry exhaustion / clarification short-circuit)
+- `test_api.py` (16 cases) — `/healthz`, `/api/query` (success / failure / explicit source / unknown source / empty / agent crash 500), `/api/datasources`, `/api/schema?source=`, `/api/history`
 
-The tests do not depend on a real database or LLM — everything is monkey-patched, so the suite runs in under a second locally.
+The tests do not depend on a real database or LLM — every connector is replaced with an in-memory stub injected into the registry, so the whole suite runs in about a second locally.
 
 ---
 
 ## Roadmap
+
+Delivered (v0.2.0):
+
+- [x] **Multi-source abstraction layer** — `DataSourceConnector` async ABC; PG / DuckDB / StarRocks engines; YAML-driven config
+- [x] **TPC-H + Brazilian E-Commerce datasets** — DuckDB built-in dbgen + Kaggle CSV loader
+- [x] **Dialect-aware SQL generation** — `DIALECT_INSTRUCTIONS` switches syntax rules per target engine
+- [x] **asyncpg connection pool** — agent hot path is fully async end-to-end
 
 Next-phase highlights:
 
 - [ ] **Multi-turn dialogue** — `conversation_history` + context summarization + anaphora resolution
 - [ ] **Local cross-encoder reranker** — `bge-reranker-v2-m3` replacing the LLM reranker; column-level retrieval
 - [ ] **SSE streaming** — `POST /api/query/stream`; UI shows the agent's thinking trace
-- [ ] **HiveQL / SparkSQL dialects** — switch prompt templates and grammar validation
 - [ ] **Tool-use Agent** — upgrade to function-calling mode
-- [ ] **Observability** — structured per-query trace, token cost tracking, error classification, asyncpg pool
+- [ ] **Observability** — structured per-query trace, token cost tracking, error classification, prompt-injection hardening
 
 ---
 

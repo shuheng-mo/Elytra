@@ -87,6 +87,11 @@ class Settings:
 
     # Paths
     data_dictionary_path: Path = PROJECT_ROOT / "db" / "data_dictionary.yaml"
+    datasources_yaml_path: Path = PROJECT_ROOT / "config" / "datasources.yaml"
+
+    # Default analytics data source — used when /api/query omits `source`.
+    # Empty string means "fall back to whatever default_source is in the YAML".
+    default_source: str = os.getenv("DEFAULT_SOURCE", "")
 
 
 settings = Settings()

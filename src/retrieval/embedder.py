@@ -320,6 +320,10 @@ class Embedder:
         Necessary when switching between providers/models with different dims
         (e.g. text-embedding-3-small=1536 → text-embedding-3-large=3072).
         Idempotent — safe to call on every startup.
+
+        Phase 2: the table now carries a ``source_name`` column so a single
+        index can serve multiple data sources, with retrieval filtering by
+        active source.
         """
         dim = self.dim
         with get_cursor(dict_rows=False) as cur:
@@ -328,6 +332,7 @@ class Embedder:
                 f"""
                 CREATE TABLE schema_embeddings (
                     id              BIGSERIAL PRIMARY KEY,
+                    source_name     VARCHAR(100) NOT NULL,
                     table_name      VARCHAR(100) NOT NULL,
                     column_name     VARCHAR(100),
                     description     TEXT NOT NULL,
@@ -340,18 +345,37 @@ class Embedder:
                 "CREATE INDEX schema_embeddings_hnsw "
                 "ON schema_embeddings USING hnsw (embedding vector_cosine_ops)"
             )
+            cur.execute(
+                "CREATE INDEX schema_embeddings_source_idx "
+                "ON schema_embeddings (source_name)"
+            )
         logger.info("schema_embeddings table bootstrapped (dim=%d)", dim)
 
-    def index_tables(self, tables: list[TableInfo]) -> int:
-        """Replace ``schema_embeddings`` rows with one per table."""
+    def index_tables(
+        self,
+        tables: list[TableInfo],
+        *,
+        source_name: str,
+    ) -> int:
+        """Insert/replace ``schema_embeddings`` rows for a single source.
+
+        Existing rows for the same source are deleted first; rows for other
+        sources are left untouched. This makes ``--source <name>`` re-indexing
+        cheap and safe.
+        """
         if not tables:
             return 0
+        if not source_name:
+            raise ValueError("source_name is required for index_tables()")
 
         texts = [t.to_text() for t in tables]
         vectors = self.embed_batch(texts)
 
         with get_cursor(dict_rows=False) as cur:
-            cur.execute("TRUNCATE schema_embeddings RESTART IDENTITY")
+            cur.execute(
+                "DELETE FROM schema_embeddings WHERE source_name = %s",
+                (source_name,),
+            )
             for tbl, text, vec in zip(tables, texts, vectors):
                 metadata = {
                     "layer": tbl.layer,
@@ -361,14 +385,16 @@ class Embedder:
                     "update_frequency": tbl.update_frequency,
                     "embedding_provider": self.backend,
                     "embedding_model": self.model,
+                    "source_name": source_name,
                 }
                 cur.execute(
                     """
                     INSERT INTO schema_embeddings
-                        (table_name, column_name, description, embedding, metadata)
-                    VALUES (%s, NULL, %s, %s::vector, %s::jsonb)
+                        (source_name, table_name, column_name, description, embedding, metadata)
+                    VALUES (%s, %s, NULL, %s, %s::vector, %s::jsonb)
                     """,
                     (
+                        source_name,
                         tbl.name,
                         text,
                         _to_pgvector(vec),
@@ -377,20 +403,44 @@ class Embedder:
                 )
         return len(tables)
 
-    def search(self, query: str, top_n: int = 20) -> list[tuple[str, float]]:
-        """Cosine-similarity search over table-level rows."""
+    def search(
+        self,
+        query: str,
+        top_n: int = 20,
+        *,
+        source_name: str | None = None,
+    ) -> list[tuple[str, float]]:
+        """Cosine-similarity search over table-level rows.
+
+        If ``source_name`` is given, results are restricted to that source.
+        ``None`` searches across all sources (only useful for diagnostics).
+        """
         vec_literal = _to_pgvector(self.embed(query))
         with get_cursor(dict_rows=True) as cur:
-            cur.execute(
-                """
-                SELECT table_name,
-                       1 - (embedding <=> %s::vector) AS score
-                FROM schema_embeddings
-                WHERE column_name IS NULL
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-                """,
-                (vec_literal, vec_literal, top_n),
-            )
+            if source_name:
+                cur.execute(
+                    """
+                    SELECT table_name,
+                           1 - (embedding <=> %s::vector) AS score
+                    FROM schema_embeddings
+                    WHERE column_name IS NULL
+                      AND source_name = %s
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (vec_literal, source_name, vec_literal, top_n),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT table_name,
+                           1 - (embedding <=> %s::vector) AS score
+                    FROM schema_embeddings
+                    WHERE column_name IS NULL
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (vec_literal, vec_literal, top_n),
+                )
             rows = cur.fetchall()
         return [(row["table_name"], float(row["score"])) for row in rows]

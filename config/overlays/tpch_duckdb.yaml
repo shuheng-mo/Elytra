@@ -1,0 +1,81 @@
+# TPC-H schema overlay (Chinese-language metadata for the standard dataset).
+#
+# Used by enrich_with_overlay() on top of DuckDBConnector.get_tables(). Only
+# fields that aren't already in the introspected metadata need to live here:
+# Chinese names, business descriptions, common queries, relationships.
+
+tables:
+  region:
+    chinese_name: 区域
+    description: TPC-H 五大区域
+    common_queries:
+      - "按区域统计供应商数量"
+
+  nation:
+    chinese_name: 国家
+    description: 25 个国家，每个国家归属一个区域
+    relationships:
+      - target_table: region
+        join_key: r_regionkey
+        join_type: inner
+
+  customer:
+    chinese_name: 客户
+    description: 客户主信息（约 SF * 150,000 行）
+    common_queries:
+      - "按客户细分统计订单"
+    relationships:
+      - target_table: nation
+        join_key: c_nationkey
+        join_type: inner
+
+  supplier:
+    chinese_name: 供应商
+    description: 供应商主信息（约 SF * 10,000 行）
+    relationships:
+      - target_table: nation
+        join_key: s_nationkey
+        join_type: inner
+
+  part:
+    chinese_name: 零件
+    description: 零件目录（约 SF * 200,000 行）
+
+  partsupp:
+    chinese_name: 零件-供应商关系
+    description: 零件与供应商的供货关系（约 SF * 800,000 行）
+    relationships:
+      - target_table: part
+        join_key: ps_partkey
+        join_type: inner
+      - target_table: supplier
+        join_key: ps_suppkey
+        join_type: inner
+
+  orders:
+    chinese_name: 订单
+    description: 订单主表（约 SF * 1,500,000 行）
+    common_queries:
+      - "按月份统计订单金额"
+      - "查询某客户的所有订单"
+    relationships:
+      - target_table: customer
+        join_key: o_custkey
+        join_type: inner
+
+  lineitem:
+    chinese_name: 订单明细
+    description: 订单明细行（最大事实表，约 SF * 6,000,000 行）
+    common_queries:
+      - "1995 年消费最高的前 10 客户"
+      - "按零件类型统计销售额"
+    relationships:
+      - target_table: orders
+        join_key: l_orderkey
+        join_type: inner
+      - target_table: part
+        join_key: l_partkey
+        join_type: inner
+      - target_table: supplier
+        join_key: l_suppkey
+        join_type: inner

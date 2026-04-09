@@ -1,0 +1,73 @@
+# Brazilian E-Commerce (Olist) schema overlay.
+# Adds Chinese names + business descriptions on top of DuckDB introspection.
+
+tables:
+  olist_orders:
+    chinese_name: 订单
+    description: 订单主表，含状态与时间戳
+    common_queries:
+      - "按月份统计订单数量"
+      - "按订单状态统计订单"
+    relationships:
+      - target_table: olist_customers
+        join_key: customer_id
+        join_type: inner
+
+  olist_order_items:
+    chinese_name: 订单明细
+    description: 订单行项目，含商品、卖家、价格、运费
+    common_queries:
+      - "按品类统计销售额"
+      - "客单价最高的卖家"
+    relationships:
+      - target_table: olist_orders
+        join_key: order_id
+        join_type: inner
+      - target_table: olist_products
+        join_key: product_id
+        join_type: inner
+      - target_table: olist_sellers
+        join_key: seller_id
+        join_type: inner
+
+  olist_products:
+    chinese_name: 商品
+    description: 商品目录，葡萄牙语品类名
+    relationships:
+      - target_table: product_category_translation
+        join_key: product_category_name
+        join_type: left
+
+  olist_customers:
+    chinese_name: 客户
+    description: 客户主表，含 zip code / 城市 / 州
+    common_queries:
+      - "按州统计客户数量"
+
+  olist_sellers:
+    chinese_name: 卖家
+    description: 卖家主表，含 zip code / 城市 / 州
+
+  olist_payments:
+    chinese_name: 支付记录
+    description: 订单支付明细，包含支付方式与金额
+    relationships:
+      - target_table: olist_orders
+        join_key: order_id
+        join_type: inner
+
+  olist_reviews:
+    chinese_name: 评价
+    description: 订单评价，含星级与评论文本
+    relationships:
+      - target_table: olist_orders
+        join_key: order_id
+        join_type: inner
+
+  olist_geolocation:
+    chinese_name: 地理位置
+    description: 巴西邮编与经纬度映射
+
+  product_category_translation:
+    chinese_name: 品类翻译
+    description: 葡萄牙语品类名 → 英文翻译

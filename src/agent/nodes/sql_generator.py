@@ -45,6 +45,7 @@ def generate_sql_node(state: AgentState) -> dict:
     retry_count = state.get("retry_count", 0)
     schemas = state.get("retrieved_schemas", [])
     schemas_text = render_schemas_for_prompt(schemas)
+    dialect = state.get("sql_dialect", "postgresql")
 
     model = route_model(intent, schemas, retry_count=retry_count)
     complexity = estimate_complexity(intent, schemas)
@@ -65,6 +66,7 @@ def generate_sql_node(state: AgentState) -> dict:
             user_query=state["user_query"],
             retrieved_schemas=schemas_text,
             intent=intent,
+            dialect=dialect,
         )
 
     try:

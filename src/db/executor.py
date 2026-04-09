@@ -1,88 +1,37 @@
-"""SQL execution layer with read-only safety filtering and statement timeout.
+"""Legacy SQL execution shim — kept for backwards compatibility.
 
-The agent only ever executes LLM-generated queries through this module. The
-contract is intentionally narrow:
+Phase 1's PG-only execution path lived here. Phase 2's connector layer
+(`src/connectors/`) replaces it. This module now exists only to:
 
-* Only ``SELECT`` (or ``WITH ... SELECT``) statements are accepted.
-* DDL/DML keywords are blocked even if they appear in subqueries.
-* The PostgreSQL session-level ``statement_timeout`` is set per-call so a
-  runaway query can't hang the agent loop.
-* Errors are returned as structured tuples instead of raised, so the
-  self-correction node can format them into the next prompt.
+* Re-export ``_is_select_only`` so old test imports keep working until they
+  migrate to ``src.connectors.base``.
+* Provide a sync ``execute_sql()`` shim that dispatches to the registry's
+  default PostgreSQL connector via ``asyncio.run``. The agent's hot path
+  no longer calls this — ``src/agent/nodes/sql_executor.py`` talks to the
+  registry directly. The shim is here for tooling and ad-hoc scripts.
 """
 
 from __future__ import annotations
 
-import re
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-import psycopg2
-
 from src.config import settings
-from src.db.connection import get_connection
-
-# Forbidden top-level keywords. We strip comments and string literals before
-# scanning so an LLM can't sneak ``DROP`` past us inside a string constant.
-_FORBIDDEN_KEYWORDS = (
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "DROP",
-    "TRUNCATE",
-    "ALTER",
-    "CREATE",
-    "GRANT",
-    "REVOKE",
-    "COMMENT",
-    "VACUUM",
-    "REINDEX",
-    "COPY",
-    "MERGE",
-    "CALL",
-    "DO",
-)
-
-_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
-_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
-_STRING_LITERAL_RE = re.compile(r"'(?:''|[^'])*'")
+from src.connectors.base import _is_select_only  # noqa: F401  (re-export)
 
 
 @dataclass
 class ExecutionResult:
+    """Legacy result type. New code should use
+    :class:`src.connectors.base.QueryResult` instead.
+    """
+
     success: bool
     rows: list[dict[str, Any]]
     row_count: int
     error: str | None = None
     error_type: str | None = None  # "safety" / "syntax" / "runtime" / "timeout"
-
-
-def _strip_for_scan(sql: str) -> str:
-    s = _BLOCK_COMMENT_RE.sub(" ", sql)
-    s = _LINE_COMMENT_RE.sub(" ", s)
-    s = _STRING_LITERAL_RE.sub("''", s)
-    return s
-
-
-def _is_select_only(sql: str) -> tuple[bool, str | None]:
-    """Return ``(ok, reason)``. Allows SELECT and CTE-leading WITH statements."""
-    stripped = _strip_for_scan(sql).strip().rstrip(";").strip()
-    if not stripped:
-        return False, "empty SQL"
-
-    head = stripped.split(None, 1)[0].upper()
-    if head not in ("SELECT", "WITH"):
-        return False, f"only SELECT/WITH statements allowed (got {head})"
-
-    upper = " " + stripped.upper() + " "
-    for kw in _FORBIDDEN_KEYWORDS:
-        if re.search(rf"\b{kw}\b", upper):
-            return False, f"forbidden keyword: {kw}"
-
-    # Disallow multiple statements
-    if ";" in stripped:
-        return False, "multiple statements are not allowed"
-    return True, None
 
 
 def execute_sql(
@@ -91,17 +40,17 @@ def execute_sql(
     timeout_seconds: int | None = None,
     max_rows: int = 1000,
 ) -> ExecutionResult:
-    """Run a single SELECT statement and return rows + metadata.
+    """Sync wrapper around the default connector. **Deprecated.**
 
-    Args:
-        sql: the SQL to execute (single statement, SELECT/WITH).
-        timeout_seconds: per-statement timeout. Defaults to
-            ``settings.sql_timeout_seconds``.
-        max_rows: hard cap on rows returned to the agent. Anything beyond is
-            silently dropped to keep prompts small.
+    Used only by legacy callers (older scripts, ad-hoc REPL use, and a handful
+    of unit tests). The agent's hot path uses the async connector registry
+    directly via :func:`src.agent.nodes.sql_executor.execute_sql_node`.
+
+    Safety filtering happens BEFORE we touch the registry, so callers can use
+    this to assert "this SQL is unsafe" without standing up a database.
     """
-    timeout_seconds = timeout_seconds or settings.sql_timeout_seconds
-
+    # Run the safety check first so unit tests can probe the filter without
+    # needing a live registry / database.
     ok, reason = _is_select_only(sql)
     if not ok:
         return ExecutionResult(
@@ -112,48 +61,24 @@ def execute_sql(
             error_type="safety",
         )
 
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"SET LOCAL statement_timeout = {int(timeout_seconds) * 1000}")
-                cur.execute(sql)
-                if cur.description is None:
-                    return ExecutionResult(
-                        success=True, rows=[], row_count=0, error=None
-                    )
-                columns = [desc[0] for desc in cur.description]
-                fetched = cur.fetchmany(max_rows)
-                rows = [dict(zip(columns, _coerce_row(row))) for row in fetched]
-                return ExecutionResult(
-                    success=True,
-                    rows=rows,
-                    row_count=len(rows),
-                    error=None,
-                )
-    except psycopg2.errors.QueryCanceled as exc:
-        return ExecutionResult(
-            success=False,
-            rows=[],
-            row_count=0,
-            error=f"query timed out after {timeout_seconds}s: {exc}",
-            error_type="timeout",
+    from src.connectors.registry import ConnectorRegistry
+
+    timeout_seconds = timeout_seconds or settings.sql_timeout_seconds
+    registry = ConnectorRegistry.get_instance()
+
+    async def _run() -> ExecutionResult:
+        if not registry.is_initialized:
+            await registry.init_from_yaml(settings.datasources_yaml_path)
+        connector = registry.get()  # default source
+        result = await connector.execute_query(
+            sql, timeout_seconds=timeout_seconds, max_rows=max_rows
         )
-    except psycopg2.Error as exc:
         return ExecutionResult(
-            success=False,
-            rows=[],
-            row_count=0,
-            error=str(exc).strip(),
-            error_type="runtime",
+            success=result.success,
+            rows=result.rows,
+            row_count=result.row_count,
+            error=result.error,
+            error_type=result.error_type,
         )
 
-
-def _coerce_row(row: tuple) -> tuple:
-    """Convert non-JSON-serializable values to strings for downstream use."""
-    out: list[Any] = []
-    for v in row:
-        if v is None or isinstance(v, (bool, int, float, str)):
-            out.append(v)
-        else:
-            out.append(str(v))
-    return tuple(out)
+    return asyncio.run(_run())

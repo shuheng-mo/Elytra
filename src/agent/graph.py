@@ -32,6 +32,7 @@ the prompt-switching logic in exactly one place.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Literal
 
@@ -123,12 +124,17 @@ agent_graph = build_agent_graph()
 # ----- Convenience runner ---------------------------------------------------
 
 
-def run_agent(
+async def run_agent_async(
     user_query: str,
     session_id: str = "",
     sql_dialect: str = "postgresql",
+    active_source: str = "",
 ) -> AgentState:
     """Run the full pipeline end-to-end and return the final state.
+
+    Async because the SQL execution node now talks to async connectors. Other
+    nodes are still sync; LangGraph handles the mix transparently via
+    ``ainvoke``.
 
     Latency is measured here (not inside any node) so it always reflects the
     total wall-clock time of the request.
@@ -137,8 +143,30 @@ def run_agent(
         user_query=user_query,
         session_id=session_id,
         sql_dialect=sql_dialect,  # type: ignore[arg-type]
+        active_source=active_source,
     )
     t0 = time.perf_counter()
-    final_state = agent_graph.invoke(initial)
+    final_state = await agent_graph.ainvoke(initial)
     final_state["latency_ms"] = int((time.perf_counter() - t0) * 1000)
     return final_state  # type: ignore[return-value]
+
+
+def run_agent(
+    user_query: str,
+    session_id: str = "",
+    sql_dialect: str = "postgresql",
+    active_source: str = "",
+) -> AgentState:
+    """Sync wrapper around :func:`run_agent_async`.
+
+    Kept for tests, CLI scripts, and any non-async caller. Production code
+    served by FastAPI should call :func:`run_agent_async` directly.
+    """
+    return asyncio.run(
+        run_agent_async(
+            user_query=user_query,
+            session_id=session_id,
+            sql_dialect=sql_dialect,
+            active_source=active_source,
+        )
+    )

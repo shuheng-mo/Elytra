@@ -20,6 +20,7 @@ Run with::
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -32,6 +33,8 @@ from src.agent.nodes import (
     sql_executor as ex_module,
 )
 from src.config import settings
+from src.connectors.base import QueryResult
+from src.connectors.registry import ConnectorRegistry
 from src.db.executor import ExecutionResult, _is_select_only, execute_sql
 from src.models.state import make_initial_state
 from src.router.model_router import estimate_complexity, route_model
@@ -180,42 +183,81 @@ class TestIntentClassifierNode:
         assert out["intent"] == "simple_query"
 
 
+class _StubConnector:
+    """Minimal DataSourceConnector stand-in for sql_executor_node tests."""
+
+    def __init__(self, canned: QueryResult):
+        self.name = "stub"
+        self.dialect = "postgresql"
+        self._canned = canned
+
+    def get_dialect(self) -> str:
+        return self.dialect
+
+    async def execute_query(self, sql: str, timeout_seconds: int = 30, max_rows: int = 1000):
+        return self._canned
+
+
+@pytest.fixture
+def stub_registry(monkeypatch):
+    """Replace the singleton ConnectorRegistry with a tiny in-memory one.
+
+    Yields a setter callback so tests can swap in different stub connectors
+    per case without rebuilding the fixture.
+    """
+    ConnectorRegistry.reset_instance()
+    registry = ConnectorRegistry.get_instance()
+
+    def set_default(connector):
+        registry._connectors["stub"] = connector  # noqa: SLF001
+        registry._default_source = "stub"
+        registry._initialized = True
+
+    yield set_default
+    ConnectorRegistry.reset_instance()
+
+
 class TestSqlExecutorNode:
     def test_no_sql_short_circuits(self):
         state = make_initial_state(user_query="x")
         state["generated_sql"] = ""
-        out = ex_module.execute_sql_node(state)
+        out = asyncio.run(ex_module.execute_sql_node(state))
         assert out["execution_success"] is False
         assert "no sql" in out["execution_error"].lower()
         assert out["execution_result"] is None
 
-    def test_calls_executor_and_translates_success(self, monkeypatch):
-        canned = ExecutionResult(
+    def test_calls_executor_and_translates_success(self, stub_registry):
+        canned = QueryResult(
             success=True,
+            columns=["a"],
             rows=[{"a": 1}, {"a": 2}],
             row_count=2,
-            error=None,
+            execution_time_ms=5,
+            sql_executed="SELECT a FROM t",
         )
-        monkeypatch.setattr(ex_module, "execute_sql", lambda sql: canned)
-        state = make_initial_state(user_query="x")
+        stub_registry(_StubConnector(canned))
+        state = make_initial_state(user_query="x", active_source="stub")
         state["generated_sql"] = "SELECT a FROM t"
-        out = ex_module.execute_sql_node(state)
+        out = asyncio.run(ex_module.execute_sql_node(state))
         assert out["execution_success"] is True
         assert out["row_count"] == 2
         assert out["execution_result"] == [{"a": 1}, {"a": 2}]
 
-    def test_translates_failure_with_error(self, monkeypatch):
-        canned = ExecutionResult(
+    def test_translates_failure_with_error(self, stub_registry):
+        canned = QueryResult(
             success=False,
+            columns=[],
             rows=[],
             row_count=0,
+            execution_time_ms=5,
+            sql_executed="SELECT bogus",
             error="syntax error at line 1",
             error_type="syntax",
         )
-        monkeypatch.setattr(ex_module, "execute_sql", lambda sql: canned)
-        state = make_initial_state(user_query="x")
+        stub_registry(_StubConnector(canned))
+        state = make_initial_state(user_query="x", active_source="stub")
         state["generated_sql"] = "SELECT bogus"
-        out = ex_module.execute_sql_node(state)
+        out = asyncio.run(ex_module.execute_sql_node(state))
         assert out["execution_success"] is False
         assert "syntax" in out["execution_error"]
         assert out["execution_result"] is None

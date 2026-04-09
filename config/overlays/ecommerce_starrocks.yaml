@@ -1,0 +1,16 @@
+# StarRocks 电商数仓 schema overlay.
+#
+# Mirrors the structure of db/data_dictionary.yaml but is intentionally lighter
+# (only the columns that need Chinese descriptions). When the StarRocks instance
+# carries the same DWD/ODS layout as the PG instance, you can copy entries
+# verbatim from db/data_dictionary.yaml — the overlay layer ignores the
+# `type:` field, so the engine type is always trusted over the YAML.
+
+tables:
+  dwd_order_detail:
+    chinese_name: 订单明细宽表
+    description: 订单的清洗 + 维度补全宽表
+    layer: DWD
+    common_queries:
+      - "上个月各品类的销售额"
+      - "金牌用户的客单价"

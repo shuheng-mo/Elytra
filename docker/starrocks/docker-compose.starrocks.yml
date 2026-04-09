@@ -1,0 +1,58 @@
+# Optional StarRocks single-node compose for Elytra.
+#
+# Bring up:
+#     docker compose -f docker/starrocks/docker-compose.starrocks.yml up -d
+#
+# StarRocks is OPTIONAL — Elytra's main docker-compose.yml only depends on
+# PostgreSQL. The connector registry will tolerate this stack being down and
+# simply mark `ecommerce_starrocks` as disconnected in /api/datasources.
+
+version: "3.9"
+
+services:
+  starrocks-fe:
+    image: starrocks/fe-ubuntu:3.2-latest
+    container_name: elytra-starrocks-fe
+    hostname: starrocks-fe
+    environment:
+      - HOST_TYPE=FQDN
+    ports:
+      - "8030:8030"   # HTTP web UI
+      - "9020:9020"   # RPC
+      - "9030:9030"   # MySQL protocol (this is what the connector uses)
+    volumes:
+      - fe_meta:/opt/starrocks/fe/meta
+      - fe_log:/opt/starrocks/fe/log
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8030/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  starrocks-be:
+    image: starrocks/be-ubuntu:3.2-latest
+    container_name: elytra-starrocks-be
+    hostname: starrocks-be
+    environment:
+      - HOST_TYPE=FQDN
+    ports:
+      - "8040:8040"   # HTTP
+      - "8060:8060"   # RPC
+      - "9050:9050"   # heartbeat
+      - "9060:9060"   # BRPC
+    volumes:
+      - be_storage:/opt/starrocks/be/storage
+      - be_log:/opt/starrocks/be/log
+    depends_on:
+      starrocks-fe:
+        condition: service_healthy
+    restart: unless-stopped
+    # After both containers are healthy you must register the BE with the FE
+    # exactly once. See README.md in this directory for the one-liner.
+
+volumes:
+  fe_meta:
+  fe_log:
+  be_storage:
+  be_log:
