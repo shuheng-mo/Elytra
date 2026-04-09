@@ -61,11 +61,20 @@ def _normalize_model(model: str) -> str:
 
 
 def _make_openai_client(api_key: str, base_url: str | None = None):
+    import httpx
     from openai import OpenAI  # local import keeps test imports cheap
 
+    # The OpenAI SDK's default connect timeout is 5s, which is too tight for
+    # cross-border links to OpenRouter (and any other internationally-hosted
+    # API): when the TLS handshake stalls, every retry restarts the 5s clock,
+    # so a sluggish ~10s handshake fails all retries before the read phase
+    # ever starts. Read is generous because slow strong models (Claude Sonnet,
+    # GPT-4o) routinely keep a request open for 60s+ before the first token.
+    timeout = httpx.Timeout(connect=20.0, read=180.0, write=60.0, pool=60.0)
+
     if base_url:
-        return OpenAI(api_key=api_key, base_url=base_url)
-    return OpenAI(api_key=api_key)
+        return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+    return OpenAI(api_key=api_key, timeout=timeout)
 
 
 def _resolve_client(model: str) -> tuple[Any, str]:

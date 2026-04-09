@@ -124,7 +124,7 @@ CREATE TABLE dwd_product_dim (
     brand           VARCHAR(100),
     price           DECIMAL(10,2),
     cost            DECIMAL(10,2),
-    margin_rate     DECIMAL(5,4),            -- (price - cost) / price
+    margin_rate     DECIMAL(7,4),            -- (price - cost) / price; widened from (5,4) to allow cost > price (loss > 100%)
     status          VARCHAR(20),
     total_sold      INT,                     -- 历史总销量
     total_revenue   DECIMAL(14,2)            -- 历史总收入

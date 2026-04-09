@@ -272,8 +272,10 @@ docker compose exec backend python eval/run_eval.py
 ### 方式 2：本地开发
 
 ```bash
-# 1. 装依赖（uv 推荐）
-uv sync
+# 1. 装依赖（uv 推荐）。--extra local-embed 会拉 sentence-transformers + torch
+#    （arm64 ~700MB），用于本地 BGE embedding —— 这是 .env.example 里的默认。
+#    如果你打算改用 OpenAI 直连 embedding，可以省掉这个 extra。
+uv sync --extra local-embed
 
 # 2. 起一个 pgvector 数据库（compose 也行）
 docker run -d --name elytra-db \
@@ -283,10 +285,11 @@ docker run -d --name elytra-db \
   -v "$PWD/db/seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro" \
   pgvector/pgvector:pg16
 
-# 3. 配 .env，把 DATABASE_URL 改成 @localhost:5432
+# 3. 配 .env，把 DATABASE_URL 和 DB_HOST 里的 `db` 改成 `localhost`
+#    （`db` 只在 docker compose 内部网络解析得了）
 cp .env.example .env
 
-# 4. 初始化 schema_embeddings
+# 4. 初始化 schema_embeddings（首次会下载 ~100MB BGE 模型权重，离线后永久可用）
 .venv/bin/python -m src.retrieval.bootstrap
 
 # 5. 起后端
@@ -406,8 +409,12 @@ Elytra/
 
 | 变量 | 说明 |
 |:---|:---|
-| `OPENROUTER_API_KEY` | **推荐**。一个 key 路由所有模型，模型名要 `vendor/model` 格式 |
+| `OPENROUTER_API_KEY` | **推荐**。一个 key 路由所有 **chat** 模型，模型名要 `vendor/model` 格式 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` | 旧式 per-vendor key，仅当 OpenRouter key 为空时使用 |
+
+> ⚠️ **OpenRouter 不代理 `/v1/embeddings` 端点**，只能路由 chat completions。
+> 因此 schema embedding 必须走"本地 sentence-transformers"或"OpenAI 直连"
+> 这两条路之一 —— 详见下方 [Embedding](#embedding三种后端自动选择) 一节。
 
 ### 模型
 
@@ -416,17 +423,24 @@ Elytra/
 | `DEFAULT_CHEAP_MODEL` | `deepseek/deepseek-chat` | 简单查询 / 一般聚合 |
 | `DEFAULT_STRONG_MODEL` | `anthropic/claude-sonnet-4` | 多表 / 探索 / 连续失败重试 |
 
-### Embedding（三种后端自动选择）
+### Embedding（两种实际可用的后端）
 
 | 变量 | 行为 |
 |:---|:---|
-| `EMBEDDING_MODEL=openai/text-embedding-3-large` | 走 OpenRouter（如果只有 OpenAI key 也能直连） |
-| `EMBEDDING_MODEL=text-embedding-3-small` | 走 OpenAI 直连 |
-| `EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5` | 走本地 sentence-transformers（需 `pip install -e ".[local-embed]"`） |
-| `EMBEDDING_PROVIDER` | `auto` (默认) / `openai` / `openrouter` / `local` |
+| `EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5` | **默认**。本地 sentence-transformers，512 维，~100MB，无需 API key、无需网络。中文场景召回质量好。需先 `uv sync --extra local-embed` |
+| `EMBEDDING_MODEL=text-embedding-3-small` | OpenAI 直连，1536 维。需要单独的 `OPENAI_API_KEY`（OpenRouter key **不行**） |
+| `EMBEDDING_PROVIDER` | `auto` (默认) / `openai` / `local` |
 | `EMBEDDING_DIM` | 默认 0 = 自动从已知模型查表，不匹配的模型需手动指定 |
 
-> **切换 embedding 模型后必须重跑 bootstrap**：pgvector 列宽是固定维度的，从 1536 维换 3072 维需要 DROP + CREATE。运行 `python -m src.retrieval.bootstrap` 即可。
+> ⚠️ **不要用 `text-embedding-3-large`（3072 维）**：pgvector 的 HNSW 索引有
+> 2000 维硬上限，bootstrap 会在 `CREATE INDEX` 处直接失败。
+>
+> ⚠️ **不要把 `EMBEDDING_MODEL` 设成 `openai/...` 这种带 vendor 前缀的形式**
+> 期望走 OpenRouter ——OpenRouter 不支持 `/v1/embeddings`，请求会无限挂到超时。
+> 想用 OpenAI 模型就配 `OPENAI_API_KEY` 走直连。
+
+> **切换 embedding 模型后必须重跑 bootstrap**：pgvector 列宽是固定维度的，
+> 从 512 维换 1536 维需要 DROP + CREATE。运行 `python -m src.retrieval.bootstrap` 即可。
 
 ### 检索 / 自修正
 

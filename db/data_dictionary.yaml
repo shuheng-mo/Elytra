@@ -508,9 +508,9 @@ tables:
         chinese_name: 成本
         description: 商品成本价
       - name: margin_rate
-        type: DECIMAL(5,4)
+        type: DECIMAL(7,4)
         chinese_name: 毛利率
-        description: 商品毛利率
+        description: 商品毛利率（可为负，表示亏本销售）
         business_logic: (price - cost) / price
       - name: status
         type: VARCHAR(20)
