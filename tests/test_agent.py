@@ -375,6 +375,12 @@ def _patch_all_nodes(monkeypatch, *, intent="aggregation", exec_results):
     def fake_retrieve(state):
         return {"retrieved_schemas": [{"table": "dwd_order_detail"}]}
 
+    def fake_permission(state):
+        return {"retrieved_schemas": state.get("retrieved_schemas", []), "user_role": "admin"}
+
+    def fake_chart(state):
+        return {"chart_spec": None}
+
     def fake_generate(state):
         return {
             "generated_sql": f"SELECT 1  -- attempt {state.get('retry_count', 0)}",
@@ -411,9 +417,11 @@ def _patch_all_nodes(monkeypatch, *, intent="aggregation", exec_results):
 
     monkeypatch.setattr(graph_module, "classify_intent_node", fake_intent)
     monkeypatch.setattr(graph_module, "retrieve_schema_node", fake_retrieve)
+    monkeypatch.setattr(graph_module, "filter_by_permission_node", fake_permission)
     monkeypatch.setattr(graph_module, "generate_sql_node", fake_generate)
     monkeypatch.setattr(graph_module, "execute_sql_node", fake_execute)
     monkeypatch.setattr(graph_module, "self_correction_node", fake_self_correction)
+    monkeypatch.setattr(graph_module, "generate_chart_node", fake_chart)
     return calls
 
 

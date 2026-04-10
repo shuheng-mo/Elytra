@@ -21,10 +21,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.audit import router as audit_router
 from src.api.datasources import router as datasources_router
 from src.api.history import router as history_router
 from src.api.query import router as query_router
+from src.api.query_async import router as async_query_router
 from src.api.schema import router as schema_router
+from src.api.ws import router as ws_router
+from src.tasks.manager import TaskManager
 from src.config import settings
 from src.connectors.registry import ConnectorRegistry
 from src.retrieval.schema_loader import SchemaLoader
@@ -52,6 +56,12 @@ async def lifespan(_app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.error("connector registry init failed: %s", exc)
         # Still let the app come up so /healthz works and operators can debug.
+
+    # Initialize the async task manager.
+    _app.state.task_manager = TaskManager(
+        max_concurrent=settings.max_concurrent_tasks,
+    )
+    logger.info("task manager initialized (max_concurrent=%d)", settings.max_concurrent_tasks)
 
     # Warm the schema cache for every source that came up successfully.
     for cfg in registry.raw_configs():
@@ -96,6 +106,9 @@ def healthz() -> dict[str, str]:
 
 
 app.include_router(query_router)
+app.include_router(async_query_router)
 app.include_router(schema_router)
 app.include_router(history_router)
 app.include_router(datasources_router)
+app.include_router(audit_router)
+app.include_router(ws_router)

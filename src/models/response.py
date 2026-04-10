@@ -28,6 +28,11 @@ class QueryResponse(BaseModel):
     latency_ms: int = 0
     token_count: int = 0
     error: Optional[str] = None
+    # Phase 2+ permission fields
+    user_role: Optional[str] = None
+    tables_filtered: int = 0
+    # Phase 2+ chart spec
+    chart_spec: Optional[dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +99,43 @@ class HistoryItem(BaseModel):
     token_count: Optional[int] = None
     estimated_cost: Optional[float] = None
     created_at: Optional[datetime] = None
+    # Phase 2+ audit fields
+    user_id: Optional[str] = None
+    user_role: Optional[str] = None
+    source_name: Optional[str] = None
+    result_row_count: Optional[int] = None
+    result_hash: Optional[str] = None
 
 
 class HistoryResponse(BaseModel):
     history: list[HistoryItem]
+
+
+# ---------------------------------------------------------------------------
+# /api/replay
+# ---------------------------------------------------------------------------
+
+
+class ReplayResponse(BaseModel):
+    original: HistoryItem
+    replay: dict[str, Any] = Field(default_factory=dict)
+    result_match: bool = False
+    diff_summary: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# /api/audit/stats
+# ---------------------------------------------------------------------------
+
+
+class AuditStatsResponse(BaseModel):
+    period: str = ""
+    total_queries: int = 0
+    success_rate: float = 0.0
+    avg_latency_ms: float = 0.0
+    total_cost_usd: float = 0.0
+    by_model: dict[str, Any] = Field(default_factory=dict)
+    by_intent: dict[str, int] = Field(default_factory=dict)
+    by_source: dict[str, int] = Field(default_factory=dict)
+    by_user: dict[str, int] = Field(default_factory=dict)
+    top_errors: list[dict[str, Any]] = Field(default_factory=list)

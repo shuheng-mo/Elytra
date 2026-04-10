@@ -88,6 +88,10 @@ class Settings:
     # Paths
     data_dictionary_path: Path = PROJECT_ROOT / "db" / "data_dictionary.yaml"
     datasources_yaml_path: Path = PROJECT_ROOT / "config" / "datasources.yaml"
+    permissions_yaml_path: Path = PROJECT_ROOT / "config" / "permissions.yaml"
+
+    # Async task manager
+    max_concurrent_tasks: int = _get_int("MAX_CONCURRENT_TASKS", 5)
 
     # Default analytics data source — used when /api/query omits `source`.
     # Empty string means "fall back to whatever default_source is in the YAML".

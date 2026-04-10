@@ -183,7 +183,17 @@ CREATE TABLE query_history (
     latency_ms      INT,
     token_count     INT,
     estimated_cost  DECIMAL(8,6),
-    created_at      TIMESTAMP DEFAULT NOW()
+    created_at      TIMESTAMP DEFAULT NOW(),
+    -- Phase 2+ audit fields
+    user_id         VARCHAR(64),
+    user_role       VARCHAR(30),
+    source_name     VARCHAR(100),
+    retrieved_tables TEXT,               -- JSON array of table names
+    correction_history_json JSONB,       -- [{sql, error, feedback}, ...]
+    result_row_count INT,
+    result_hash     VARCHAR(64),         -- SHA-256 of sorted result set
+    token_input     INT,
+    token_output    INT
 );
 
 CREATE TABLE schema_embeddings (

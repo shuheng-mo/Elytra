@@ -61,14 +61,59 @@ def api_get_history(session_id: str, limit: int = 20) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def render_chart(rows: list[dict[str, Any]], hint: str | None) -> None:
-    """Render the result table as a chart based on the agent's visualization hint."""
+def _render_echart(chart_spec: dict[str, Any]) -> bool:
+    """Attempt to render an ECharts spec. Returns True if successful."""
+    try:
+        from streamlit_echarts import st_echarts
+    except ImportError:
+        return False
+
+    chart_type = chart_spec.get("chart_type")
+    if chart_type == "number_card":
+        st.metric(label=chart_spec.get("field", ""), value=chart_spec.get("value"))
+        return True
+
+    # Build a proper ECharts option dict
+    option: dict[str, Any] = {"title": {"text": chart_spec.get("title", "")}}
+
+    if "x_axis" in chart_spec:
+        option["xAxis"] = {
+            "type": "category",
+            "data": chart_spec["x_axis"].get("data", []),
+        }
+    if "y_axis" in chart_spec:
+        option["yAxis"] = {"type": "value"}
+    if "series" in chart_spec:
+        option["series"] = chart_spec["series"]
+
+    option["tooltip"] = {"trigger": "axis" if chart_type != "pie" else "item"}
+
+    if chart_type == "pie":
+        # Pie doesn't use xAxis/yAxis
+        option.pop("xAxis", None)
+        option.pop("yAxis", None)
+
+    st_echarts(option, height="400px")
+    return True
+
+
+def render_chart(rows: list[dict[str, Any]], hint: str | None, chart_spec: dict | None = None) -> None:
+    """Render the result table as a chart based on chart_spec or visualization hint."""
     if not rows:
         st.info("查询返回了 0 行结果。")
         return
 
     df = pd.DataFrame(rows)
 
+    # Phase 2+: prefer ECharts spec when available
+    if chart_spec:
+        rendered = _render_echart(chart_spec)
+        if rendered:
+            with st.expander("查看原始数据", expanded=False):
+                st.dataframe(df, use_container_width=True)
+            return
+
+    # Fallback to Phase 1 built-in charts
     if hint == "number" and len(df) == 1 and len(df.columns) == 1:
         col = df.columns[0]
         st.metric(label=col, value=df.iloc[0, 0])
@@ -251,7 +296,7 @@ def main() -> None:
 
     with tab_result:
         rows = response.get("result") or []
-        render_chart(rows, response.get("visualization_hint"))
+        render_chart(rows, response.get("visualization_hint"), response.get("chart_spec"))
 
     with tab_sql:
         sql = response.get("generated_sql")

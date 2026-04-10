@@ -17,6 +17,11 @@ class QueryRequest(BaseModel):
         max_length=64,
         description="数据源名称（对应 datasources.yaml 中的 name；省略则使用 default_source）",
     )
+    user_id: Optional[str] = Field(
+        None,
+        max_length=64,
+        description="用户标识，用于权限过滤（省略则使用 default_role）",
+    )
     # `dialect` is retained for backwards compatibility with Phase 1 clients
     # but the dialect is now derived from the connector behind `source`.
     dialect: Optional[SqlDialect] = Field(

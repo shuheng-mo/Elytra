@@ -64,6 +64,13 @@ class AgentState(TypedDict, total=False):
     latency_ms: int
     token_count: int
 
+    # ----- Permission (Phase 2+) -----
+    user_id: str
+    user_role: str
+
+    # ----- Chart (Phase 2+) -----
+    chart_spec: Optional[dict[str, Any]]
+
     # ----- Phase 2 extensions (placeholders) -----
     conversation_history: list[dict[str, Any]]
     context_summary: Optional[str]
@@ -74,6 +81,7 @@ def make_initial_state(
     session_id: str = "",
     sql_dialect: SqlDialect = "postgresql",
     active_source: str = "",
+    user_id: str = "",
 ) -> AgentState:
     """Build a fresh AgentState with sensible defaults for every field."""
     return AgentState(
@@ -97,6 +105,9 @@ def make_initial_state(
         visualization_hint=None,
         latency_ms=0,
         token_count=0,
+        user_id=user_id,
+        user_role="",
+        chart_spec=None,
         conversation_history=[],
         context_summary=None,
     )

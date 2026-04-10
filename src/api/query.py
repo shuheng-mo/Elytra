@@ -9,6 +9,8 @@ Pipeline:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from typing import Any
 
@@ -25,17 +27,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["query"])
 
 
+def _compute_result_hash(rows: list[dict[str, Any]] | None) -> str | None:
+    """SHA-256 hash of the first 100 result rows for replay comparison."""
+    if not rows:
+        return None
+    try:
+        payload = json.dumps(rows[:100], sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode()).hexdigest()
+    except (TypeError, ValueError):
+        return None
+
+
 def _persist_history(state: dict[str, Any]) -> None:
     """Best-effort write to ``query_history``. Swallows any error."""
     try:
+        # Extract retrieved table names as JSON string
+        schemas = state.get("retrieved_schemas") or []
+        retrieved_tables = json.dumps(
+            [s.get("table") or s.get("table_name", "") for s in schemas]
+        ) if schemas else None
+
+        # Serialize correction history
+        correction_history = state.get("correction_history")
+        correction_json = (
+            json.dumps(correction_history, default=str)
+            if correction_history else None
+        )
+
+        result_hash = _compute_result_hash(state.get("execution_result"))
+
         with get_cursor(dict_rows=False) as cur:
             cur.execute(
                 """
                 INSERT INTO query_history (
                     session_id, user_query, intent, generated_sql,
                     execution_success, retry_count, model_used,
-                    latency_ms, token_count
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    latency_ms, token_count,
+                    user_id, user_role, source_name,
+                    retrieved_tables, correction_history_json,
+                    result_row_count, result_hash
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s
+                )
                 """,
                 (
                     state.get("session_id") or None,
@@ -47,6 +81,13 @@ def _persist_history(state: dict[str, Any]) -> None:
                     state.get("model_used"),
                     state.get("latency_ms", 0),
                     state.get("token_count", 0),
+                    state.get("user_id") or None,
+                    state.get("user_role") or None,
+                    state.get("active_source") or None,
+                    retrieved_tables,
+                    correction_json,
+                    state.get("row_count"),
+                    result_hash,
                 ),
             )
     except Exception as exc:  # noqa: BLE001
@@ -86,6 +127,7 @@ async def post_query(req: QueryRequest) -> QueryResponse:
             session_id=req.session_id or "",
             sql_dialect=dialect,
             active_source=source_name,
+            user_id=req.user_id or "",
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("agent run failed")
@@ -108,4 +150,7 @@ async def post_query(req: QueryRequest) -> QueryResponse:
         latency_ms=int(final_state.get("latency_ms", 0)),
         token_count=int(final_state.get("token_count", 0)),
         error=final_state.get("execution_error"),
+        user_role=final_state.get("user_role") or None,
+        tables_filtered=0,
+        chart_spec=final_state.get("chart_spec"),
     )

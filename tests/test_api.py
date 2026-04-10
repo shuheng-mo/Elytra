@@ -119,6 +119,7 @@ def _fake_run_agent(*, success: bool = True, retries: int = 0) -> Any:
         session_id: str = "",
         sql_dialect: str = "postgresql",
         active_source: str = "",
+        user_id: str = "",
     ):
         return {
             "user_query": user_query,
@@ -139,6 +140,8 @@ def _fake_run_agent(*, success: bool = True, retries: int = 0) -> Any:
             "visualization_hint": "bar_chart" if success else None,
             "latency_ms": 1234,
             "token_count": 567,
+            "user_id": user_id,
+            "user_role": "analyst",
         }
 
     return _runner
@@ -198,7 +201,7 @@ class TestPostQuery:
     def test_explicit_source_routes_correctly(self, client, monkeypatch, stub_persist):
         captured: dict[str, str] = {}
 
-        async def _capture(user_query, session_id="", sql_dialect="postgresql", active_source=""):
+        async def _capture(user_query, session_id="", sql_dialect="postgresql", active_source="", user_id=""):
             captured["source"] = active_source
             captured["dialect"] = sql_dialect
             return {
@@ -227,7 +230,7 @@ class TestPostQuery:
         assert resp.status_code == 422  # Pydantic min_length=1
 
     def test_agent_exception_returns_500(self, client, monkeypatch, stub_persist):
-        async def boom(**kwargs):
+        async def boom(user_query, session_id="", sql_dialect="postgresql", active_source="", user_id=""):
             raise RuntimeError("agent crashed")
 
         monkeypatch.setattr(query_module, "run_agent_async", boom)
@@ -335,6 +338,11 @@ def _row(i: int, session: str = "abc", success: bool = True) -> dict:
         "token_count": 200 + i,
         "estimated_cost": 0.0001,
         "created_at": dt.datetime(2026, 4, 6, 12, 0, i),
+        "user_id": None,
+        "user_role": None,
+        "source_name": "ecommerce_pg",
+        "result_row_count": 1,
+        "result_hash": None,
     }
 
 

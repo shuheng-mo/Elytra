@@ -1,0 +1,41 @@
+# Role-based permission configuration for Elytra (Phase 2+).
+# Production environments should integrate SSO/LDAP; this YAML is a
+# lightweight substitute suitable for demos and small deployments.
+
+roles:
+  analyst:
+    description: "业务分析师，可访问DWS聚合层和DWD明细层"
+    allowed_tables:
+      - "dws_*"
+      - "dwd_order_detail"
+      - "dwd_product_dim"
+    denied_columns:
+      dwd_order_detail:
+        - "cost_amount"
+        - "profit"
+    max_result_rows: 1000
+
+  operator:
+    description: "运营人员，只能访问DWS聚合层"
+    allowed_tables:
+      - "dws_*"
+    denied_columns: {}
+    max_result_rows: 500
+
+  admin:
+    description: "管理员，可访问全部表和字段"
+    allowed_tables:
+      - "*"
+    denied_columns: {}
+    max_result_rows: 10000
+
+# User → role mapping.
+users:
+  demo_analyst:
+    role: analyst
+  demo_operator:
+    role: operator
+  demo_admin:
+    role: admin
+
+default_role: analyst

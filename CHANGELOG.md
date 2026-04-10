@@ -13,13 +13,149 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned (Phase 2 — see [`prd.md`](prd.md) §7)
+### Planned
 
 - **Multi-turn dialogue** — `conversation_history` + `context_summary` in `AgentState`, anaphora resolution via LLM rewrite, sliding-window context compression
 - **Local cross-encoder reranker** — replace `LLMReranker` with `bge-reranker-v2-m3`; column-level retrieval; query expansion with multi-route fusion
-- **SSE streaming endpoint** — `POST /api/query/stream` emitting agent intermediate states; Streamlit UI shows the agent's thinking trace
 - **Tool-use Agent** — upgrade the LangGraph node-based agent into a function-calling agent with `query_database` / `get_table_schema` / `create_visualization` / `clarify_with_user` tools
 - **Observability** — structured per-query trace logs, token/cost tracking, error-class statistics, prompt-injection hardening
+
+---
+
+## [0.3.0] — Async Tasks, Permissions, Audit & NL2Chart
+
+Four incremental features bringing Elytra closer to production readiness:
+async task execution, role-based access control, full query audit trail,
+and automatic chart generation.
+
+### Added
+
+#### Async task architecture (`src/tasks/`, `src/api/query_async.py`, `src/api/ws.py`)
+
+- `TaskManager` — in-memory async task manager with `asyncio.Semaphore`
+  concurrency control (configurable via `MAX_CONCURRENT_TASKS`, default 5)
+  and subscriber-based progress push via `asyncio.Queue`.
+- `POST /api/query/async` — accepts the same `QueryRequest` body as
+  `/api/query`, returns `{"task_id", "status", "ws_url"}` immediately.
+  The agent runs in a background `asyncio.Task`.
+- `GET /api/task/{task_id}` — poll task status, progress percentage,
+  current step, and final result (when complete).
+- `WebSocket /ws/task/{task_id}` — real-time event stream. Pushes
+  `{"type": "progress", "step": "generating_sql", "pct": 60}` after each
+  LangGraph node completes; sends `{"type": "complete", ...}` on finish.
+- `execute_with_progress()` uses LangGraph `astream_events(version="v2")`
+  to map node completions to progress percentages without modifying any
+  node code.
+
+#### Permission & multi-tenant isolation (`src/auth/`, `config/permissions.yaml`)
+
+- `config/permissions.yaml` — YAML-driven role definitions with three
+  built-in roles: `analyst` (DWD+DWS), `operator` (DWS only), `admin`
+  (all tables). Each role declares `allowed_tables` (glob patterns like
+  `dws_*`), `denied_columns` (per-table field blacklist), and
+  `max_result_rows`.
+- `PermissionFilter` class — loads the YAML config; resolves `user_id` →
+  role; filters `retrieved_schemas` by allowed tables and denied columns;
+  enforces SQL `LIMIT` clamping. Degrades gracefully when the config file
+  is missing (all-access).
+- `filter_by_permission_node` — new LangGraph node inserted between
+  `retrieve_schema` and `generate_sql`. If all tables are filtered out,
+  short-circuits to clarification with a permission-denied message.
+- `QueryRequest` gained an optional `user_id` field; `QueryResponse`
+  gained `user_role` and `tables_filtered`.
+
+#### SQL audit log & replay (`src/api/audit.py`, `db/migrations/001_extend_query_history.sql`)
+
+- `query_history` table extended with 9 new nullable columns: `user_id`,
+  `user_role`, `source_name`, `retrieved_tables` (JSON), `correction_history_json`
+  (JSONB), `result_row_count`, `result_hash` (SHA-256 of first 100 rows),
+  `token_input`, `token_output`.
+- `_persist_history()` now writes all audit fields including computed
+  `result_hash` via `_compute_result_hash()`.
+- `POST /api/replay/{history_id}` — loads a historical query, re-executes
+  it through the full agent pipeline, computes a new `result_hash`, and
+  compares with the original. Returns `result_match: bool` and
+  `diff_summary` when hashes differ.
+- `GET /api/audit/stats?days=N` — aggregate statistics over the last N
+  days: total queries, success rate, average latency, cost, breakdowns by
+  model / intent / source / user.
+- `db/migrations/001_extend_query_history.sql` — safe `ALTER TABLE ADD
+  COLUMN IF NOT EXISTS` migration for existing databases.
+
+#### NL2Chart (`src/chart/`, `src/agent/nodes/chart_generator.py`)
+
+- Rule-based chart type inference engine in `src/chart/inferrer.py`:
+  - 1 row × 1 col → `number_card`
+  - temporal + numeric → `line`
+  - categorical + numeric (≤ 8 rows) → `pie`
+  - categorical + numeric (> 8 rows) → `bar`
+  - numeric + numeric → `scatter`
+  - temporal + categorical + numeric → `multi_line`
+  - Handles PostgreSQL `DECIMAL` columns returned as strings by psycopg2.
+- `src/chart/echarts_builder.py` — builds ECharts-compatible JSON option
+  objects. Truncates to sane limits (20 bars, 200 line points, 10 pie
+  slices) to keep response size manageable.
+- `generate_chart_node` — new LangGraph node after `format_result` on the
+  success path. Writes `chart_spec` (dict or None) into `AgentState`.
+- `QueryResponse` gained `chart_spec: Optional[dict]`.
+- `frontend/app.py` — renders ECharts specs via `streamlit-echarts` 0.4.x;
+  falls back to Phase 1 built-in Streamlit charts when `chart_spec` is
+  None or the library is unavailable.
+
+#### Architecture decisions (`README.md`)
+
+- New "架构决策" section explaining why Celery/Redis is unnecessary
+  (bottleneck is LLM API, not compute) and why YAML-driven permissions
+  instead of full RBAC.
+
+### Changed
+
+- `src/agent/graph.py` — LangGraph topology expanded from 8 to 10 nodes.
+  Two new edges: `retrieve_schema → filter_by_permission → generate_sql`
+  and `format_result → generate_chart → END`.
+- `src/models/state.py::AgentState` — new fields: `user_id`, `user_role`,
+  `chart_spec`.
+- `src/models/request.py::QueryRequest` — new optional `user_id` field.
+- `src/models/response.py` — `QueryResponse` gained `user_role`,
+  `tables_filtered`, `chart_spec`; `HistoryItem` gained `user_id`,
+  `user_role`, `source_name`, `result_row_count`, `result_hash`; new
+  models `ReplayResponse`, `AuditStatsResponse`.
+- `src/api/query.py::_persist_history()` — extended INSERT from 9 to 16
+  columns with full audit data.
+- `src/api/history.py` — SELECT includes new audit columns.
+- `src/main.py` — registers 3 new routers (async_query, ws, audit);
+  initializes `TaskManager` in lifespan.
+- `src/config.py` — added `permissions_yaml_path` and `max_concurrent_tasks`.
+- `db/init.sql` — `query_history` table includes Phase 2+ audit columns
+  from the start (for fresh installs).
+- `pyproject.toml` — added `streamlit-echarts>=0.4,<0.5` dependency.
+- `frontend/app.py` — `render_chart` now accepts `chart_spec` and
+  delegates to `_render_echart()` when available.
+- `tests/test_agent.py::_patch_all_nodes` — patches the two new nodes
+  (`filter_by_permission_node`, `generate_chart_node`).
+- `tests/test_api.py` — `_fake_run_agent` and `_row()` updated for new
+  fields and `user_id` parameter.
+
+### Verification
+
+| Test suite | Cases | Result |
+|---|---:|:---:|
+| `tests/test_connectors.py` | 32 | ✅ PASS |
+| `tests/test_retrieval.py` | 20 | ✅ PASS |
+| `tests/test_agent.py` | 41 | ✅ PASS |
+| `tests/test_api.py` | 16 | ✅ PASS |
+| `tests/test_audit.py` | 9 | ✅ PASS |
+| `tests/test_permissions.py` | 17 | ✅ PASS |
+| `tests/test_tasks.py` | 10 | ✅ PASS |
+| `tests/test_chart.py` | 25 | ✅ PASS |
+| **Total** | **173** | **✅ 173/173 passing** |
+
+E2E verified on live PG + LLM stack:
+
+- Permission filtering: `demo_operator` restricted to DWS tables, `demo_admin` accesses all
+- Audit log: `query_history` records user_id, user_role, source_name, result_hash, retrieved_tables
+- Async tasks: `POST /api/query/async` → poll `GET /api/task/{id}` → success
+- NL2Chart: categorical → pie, time series → line, single value → number_card
 
 ---
 
@@ -47,7 +183,7 @@ retrieval / API code changes required.
   `string`/`integer`/`decimal`/`date`/`timestamp`/`boolean`/`json`/`array`
   vocabulary), and `SET LOCAL statement_timeout` per query for cancellation.
 - `duckdb_connector.py` — embedded DuckDB connector via the `duckdb` driver
-  + `asyncio.to_thread`. Holds an `asyncio.Lock` to serialize the
+  - `asyncio.to_thread`. Holds an `asyncio.Lock` to serialize the
   non-thread-safe single connection, and uses `asyncio.wait_for` +
   `conn.interrupt()` to actually cancel runaway queries (DuckDB has no
   built-in statement timeout).
@@ -191,7 +327,7 @@ retrieval / API code changes required.
   this shim.
 - `src/db/connection.py` is unchanged but its docstring now states
   explicitly that it serves only the **infrastructure DB** (`query_history`
-  + `schema_embeddings`), never analytics queries.
+  - `schema_embeddings`), never analytics queries.
 - `db/init.sql` — `schema_embeddings` table grew the `source_name` column
   and index.
 - `src/models/request.py::QueryRequest` — added `source: Optional[str]`;
@@ -244,8 +380,7 @@ Run with `.venv/bin/python -m pytest tests/`.
 
 ## [0.1.0] — Phase 1 MVP
 
-First end-to-end NL→SQL pipeline. Implements every Phase 1 deliverable in
-[`prd.md`](prd.md) §10 (Steps 1–8) and meets every metric in §6.2.
+First end-to-end NL→SQL pipeline. Implements every Phase 1 deliverable.
 
 ### Added
 
@@ -274,7 +409,7 @@ First end-to-end NL→SQL pipeline. Implements every Phase 1 deliverable in
 
 #### LangGraph agent (`src/agent/`)
 
-- `models/state.py` — `AgentState` TypedDict matching PRD §5.1 (intent, retrieved_schemas, generated_sql, execution_*, retry_count, correction_history, model_used, complexity_score, latency_ms, token_count, …)
+- `models/state.py` — `AgentState` TypedDict (intent, retrieved_schemas, generated_sql, execution_*, retry_count, correction_history, model_used, complexity_score, latency_ms, token_count, …)
 - `nodes/`:
   - `intent_classifier` — LLM-based with deterministic keyword heuristic fallback
   - `schema_retrieval` — wraps `HybridRetriever` + `LLMReranker`, caches the singleton
@@ -299,7 +434,7 @@ First end-to-end NL→SQL pipeline. Implements every Phase 1 deliverable in
 
 #### Model router (`src/router/`)
 
-- `model_router.py` — deterministic rule engine per PRD §5.5:
+- `model_router.py` — deterministic rule engine:
   - simple_query / aggregation with ≤1–2 tables → cheap model
   - multi_join / ≥3 tables / exploration → strong model
   - `retry_count >= 2` forces upgrade to strong model regardless of intent
@@ -319,7 +454,7 @@ First end-to-end NL→SQL pipeline. Implements every Phase 1 deliverable in
   - Sidebar **data dictionary browser** grouped by ODS / DWD / DWS, collapsible per-table panels with field tables and common-query examples
   - Sidebar **history viewer** showing the 10 most recent queries for the current session with ✅/❌ status markers
   - Sidebar **session controls** with UUID-generated session id and "new session" button
-  - Main panel: query textarea, 5 example query buttons echoing PRD test queries, success/error banner, 5-column metrics row (intent / model / retries / latency / tokens), 3 result tabs (`结果` / `SQL` / `原始响应`)
+  - Main panel: query textarea, 5 example query buttons, success/error banner, 5-column metrics row (intent / model / retries / latency / tokens), 3 result tabs (`结果` / `SQL` / `原始响应`)
   - `render_chart` dispatches on `visualization_hint`: `number` → `st.metric`, `bar_chart` / `line_chart` → matching Streamlit chart, else table fallback
   - HTTP client with `API_URL` / `API_TIMEOUT` env-var configuration; schema cached for 5 minutes via `@st.cache_data`
 
@@ -332,12 +467,12 @@ First end-to-end NL→SQL pipeline. Implements every Phase 1 deliverable in
 #### Evaluation harness (`eval/`)
 
 - `test_queries.yaml` — 14 hand-curated cases covering `simple_query` × 4, `aggregation` × 4, `multi_join` × 3, `ranking` × 2, `exploration` × 1, with `expected_tables`, `expected_sql_contains`, and four `expected_result_check` shapes (`single_value`, `first_row`, `row_count`, `non_empty`)
-- `run_eval.py` — driver that hits `POST /api/query`, computes every PRD §6.2 metric (SQL success, result accuracy, schema recall, avg latency, self-correction rate, SQL substring match), and writes a `<timestamp>.json` + `<timestamp>.md` report into `eval/results/`. The markdown report decorates each metric with the Phase 1 PASS/FAIL verdict and includes per-category and per-case breakdowns.
+- `run_eval.py` — driver that hits `POST /api/query`, computes key metrics (SQL success, result accuracy, schema recall, avg latency, self-correction rate, SQL substring match), and writes a `<timestamp>.json` + `<timestamp>.md` report into `eval/results/`. The markdown report decorates each metric with the PASS/FAIL verdict and includes per-category and per-case breakdowns.
 
 #### Tests (`tests/`, **75 test cases, 100 % passing**)
 
 - `test_retrieval.py` — tokenizer (CJK + Latin), `BM25Index`, min-max normalizer, `HybridRetriever` score fusion, vector-failure fallback, real `data_dictionary.yaml` smoke test
-- `test_agent.py` — SQL safety filter (positive + negative parametrized cases including string-literal trickery), `route_model` for every PRD §5.5 branch, `estimate_complexity`, intent classifier heuristic fallback, sql_executor adapter, self_correction bookkeeping, all four `result_formatter` visualization shapes, full graph end-to-end with monkey-patched nodes (success path / retry-then-success / retry-exhaustion-to-error / clarification short-circuit)
+- `test_agent.py` — SQL safety filter (positive + negative parametrized cases including string-literal trickery), `route_model` for every routing branch, `estimate_complexity`, intent classifier heuristic fallback, sql_executor adapter, self_correction bookkeeping, all four `result_formatter` visualization shapes, full graph end-to-end with monkey-patched nodes (success path / retry-then-success / retry-exhaustion-to-error / clarification short-circuit)
 - `test_api.py` — FastAPI `TestClient` against `/healthz`, `/api/query` (success / failure / dialect rejection / empty query / agent-crash 500), `/api/schema` (three layers / no SYSTEM exposure / column shape), `/api/history` (empty / rows / no-session-id / DB error / limit validation)
 
 ### Configuration
@@ -383,6 +518,6 @@ Pre-release suffixes:
 
 **[⬆ Back to top](#changelog)**
 
-For the full product spec, see [`prd.md`](prd.md). For setup, see [`README.md`](README.md).
+For setup instructions, see [`README.md`](README.md).
 
 </div>

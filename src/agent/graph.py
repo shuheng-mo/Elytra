@@ -6,7 +6,7 @@ Topology
 
     classify_intent
         ├── clarification ─────────────► format_clarification ──► END
-        └── other intents ─► retrieve_schema ─► generate_sql
+        └── other intents ─► retrieve_schema ─► filter_by_permission ─► generate_sql
                                                      │
                                                      ▼
                                                 execute_sql
@@ -38,7 +38,9 @@ from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 
+from src.agent.nodes.chart_generator import generate_chart_node
 from src.agent.nodes.intent_classifier import classify_intent_node
+from src.agent.nodes.permission_filter import filter_by_permission_node
 from src.agent.nodes.result_formatter import (
     format_clarification_node,
     format_error_node,
@@ -78,10 +80,12 @@ def build_agent_graph():
 
     graph.add_node("classify_intent", classify_intent_node)
     graph.add_node("retrieve_schema", retrieve_schema_node)
+    graph.add_node("filter_by_permission", filter_by_permission_node)
     graph.add_node("generate_sql", generate_sql_node)
     graph.add_node("execute_sql", execute_sql_node)
     graph.add_node("self_correction", self_correction_node)
     graph.add_node("format_result", format_result_node)
+    graph.add_node("generate_chart", generate_chart_node)
     graph.add_node("format_error", format_error_node)
     graph.add_node("format_clarification", format_clarification_node)
 
@@ -96,7 +100,8 @@ def build_agent_graph():
         },
     )
 
-    graph.add_edge("retrieve_schema", "generate_sql")
+    graph.add_edge("retrieve_schema", "filter_by_permission")
+    graph.add_edge("filter_by_permission", "generate_sql")
     graph.add_edge("generate_sql", "execute_sql")
 
     graph.add_conditional_edges(
@@ -110,7 +115,8 @@ def build_agent_graph():
     )
 
     graph.add_edge("self_correction", "generate_sql")
-    graph.add_edge("format_result", END)
+    graph.add_edge("format_result", "generate_chart")
+    graph.add_edge("generate_chart", END)
     graph.add_edge("format_error", END)
     graph.add_edge("format_clarification", END)
 
@@ -129,6 +135,7 @@ async def run_agent_async(
     session_id: str = "",
     sql_dialect: str = "postgresql",
     active_source: str = "",
+    user_id: str = "",
 ) -> AgentState:
     """Run the full pipeline end-to-end and return the final state.
 
@@ -144,6 +151,7 @@ async def run_agent_async(
         session_id=session_id,
         sql_dialect=sql_dialect,  # type: ignore[arg-type]
         active_source=active_source,
+        user_id=user_id,
     )
     t0 = time.perf_counter()
     final_state = await agent_graph.ainvoke(initial)
@@ -156,6 +164,7 @@ def run_agent(
     session_id: str = "",
     sql_dialect: str = "postgresql",
     active_source: str = "",
+    user_id: str = "",
 ) -> AgentState:
     """Sync wrapper around :func:`run_agent_async`.
 
@@ -168,5 +177,6 @@ def run_agent(
             session_id=session_id,
             sql_dialect=sql_dialect,
             active_source=active_source,
+            user_id=user_id,
         )
     )

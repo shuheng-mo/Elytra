@@ -23,7 +23,8 @@ def get_history(
     sql = """
         SELECT id, session_id, user_query, intent, generated_sql,
                execution_success, COALESCE(retry_count, 0) AS retry_count,
-               model_used, latency_ms, token_count, estimated_cost, created_at
+               model_used, latency_ms, token_count, estimated_cost, created_at,
+               user_id, user_role, source_name, result_row_count, result_hash
         FROM query_history
         {where}
         ORDER BY created_at DESC
@@ -61,6 +62,11 @@ def get_history(
                 float(row["estimated_cost"]) if row.get("estimated_cost") is not None else None
             ),
             created_at=row.get("created_at"),
+            user_id=row.get("user_id"),
+            user_role=row.get("user_role"),
+            source_name=row.get("source_name"),
+            result_row_count=row.get("result_row_count"),
+            result_hash=row.get("result_hash"),
         )
         for row in rows
     ]
