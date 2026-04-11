@@ -78,3 +78,22 @@ datasources:
     options:
       timeout_seconds: 30
     overlay: config/overlays/ecommerce_starrocks.yaml
+
+  # ---------------------------------------------------------------------------
+  # ClickHouse (optional) — columnar OLAP, widely used by ByteDance / Kuaishou
+  # / Bilibili. Elytra adds the NL-query layer that CH itself doesn't ship.
+  # Bring up via `docker compose -f docker/clickhouse/docker-compose.clickhouse.yml up -d`
+  # then load data with `python datasets/clickhouse/load_data.py`.
+  # ---------------------------------------------------------------------------
+  - name: ecommerce_clickhouse
+    dialect: clickhouse
+    description: "电商数仓 (ClickHouse 列式 OLAP, MergeTree 引擎)"
+    connection:
+      host: ${CLICKHOUSE_HOST:-localhost}
+      port: ${CLICKHOUSE_PORT:-8123}
+      database: ${CLICKHOUSE_DB:-elytra}
+      user: ${CLICKHOUSE_USER:-default}
+      password: ${CLICKHOUSE_PASSWORD:-}
+    options:
+      timeout_seconds: 30
+    overlay: config/overlays/ecommerce_clickhouse.yaml

@@ -84,6 +84,18 @@ class Settings:
     rerank_top_k: int = _get_int("RERANK_TOP_K", 5)
     max_retry_count: int = _get_int("MAX_RETRY_COUNT", 3)
     sql_timeout_seconds: int = _get_int("SQL_TIMEOUT_SECONDS", 30)
+    # v0.5.0 — reranker backend selection.
+    #
+    # Default is "llm" because bge-reranker-v2-m3 is a 568M parameter
+    # multilingual cross-encoder that is slow on consumer CPUs and Apple
+    # MPS (~5-30s per rerank). Users with a real GPU can set
+    # ``RERANKER_PROVIDER=local`` to get the local cross-encoder, or
+    # ``RERANKER_PROVIDER=auto`` to try local first with an LLM fallback.
+    reranker_provider: str = os.getenv("RERANKER_PROVIDER", "llm")
+    reranker_model: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+    # Column-level schema retrieval — weight for merging column hits into
+    # their parent table score. Set to 0 to disable column-level retrieval.
+    column_retrieval_weight: float = _get_float("COLUMN_RETRIEVAL_WEIGHT", 0.6)
 
     # Paths
     data_dictionary_path: Path = PROJECT_ROOT / "db" / "data_dictionary.yaml"

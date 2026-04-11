@@ -362,21 +362,47 @@ class Embedder:
         Existing rows for the same source are deleted first; rows for other
         sources are left untouched. This makes ``--source <name>`` re-indexing
         cheap and safe.
+
+        v0.5.0: we now index at BOTH table level (``column_name IS NULL``) and
+        column level (one row per column). The column-level rows let the
+        hybrid retriever boost parent tables that match the query via a
+        specific field — e.g. "city 字段在哪些表里" hits the ``city`` column
+        row directly, and the parent table gets a score boost through
+        ``HybridRetriever._merge_column_hits``.
         """
         if not tables:
             return 0
         if not source_name:
             raise ValueError("source_name is required for index_tables()")
 
-        texts = [t.to_text() for t in tables]
-        vectors = self.embed_batch(texts)
+        # Build the full text list: one per table, then one per (table, column)
+        table_texts = [t.to_text() for t in tables]
+        column_rows: list[tuple[TableInfo, Any, str]] = []
+        for tbl in tables:
+            for col in tbl.columns:
+                if not col.name:
+                    continue
+                desc_parts = [
+                    f"{tbl.name}.{col.name}",
+                    col.type or "",
+                    col.chinese_name or "",
+                    col.description or "",
+                ]
+                col_text = " ".join(p for p in desc_parts if p).strip()
+                column_rows.append((tbl, col, col_text))
+
+        all_texts = table_texts + [c[2] for c in column_rows]
+        all_vectors = self.embed_batch(all_texts)
+        table_vectors = all_vectors[: len(table_texts)]
+        column_vectors = all_vectors[len(table_texts) :]
 
         with get_cursor(dict_rows=False) as cur:
             cur.execute(
                 "DELETE FROM schema_embeddings WHERE source_name = %s",
                 (source_name,),
             )
-            for tbl, text, vec in zip(tables, texts, vectors):
+            # Table-level rows
+            for tbl, text, vec in zip(tables, table_texts, table_vectors):
                 metadata = {
                     "layer": tbl.layer,
                     "chinese_name": tbl.chinese_name,
@@ -386,6 +412,7 @@ class Embedder:
                     "embedding_provider": self.backend,
                     "embedding_model": self.model,
                     "source_name": source_name,
+                    "kind": "table",
                 }
                 cur.execute(
                     """
@@ -401,7 +428,40 @@ class Embedder:
                         json.dumps(metadata, ensure_ascii=False),
                     ),
                 )
-        return len(tables)
+            # Column-level rows
+            for (tbl, col, text), vec in zip(column_rows, column_vectors):
+                col_meta = {
+                    "layer": tbl.layer,
+                    "chinese_name": col.chinese_name,
+                    "type": col.type,
+                    "parent_table": tbl.name,
+                    "embedding_provider": self.backend,
+                    "embedding_model": self.model,
+                    "source_name": source_name,
+                    "kind": "column",
+                }
+                cur.execute(
+                    """
+                    INSERT INTO schema_embeddings
+                        (source_name, table_name, column_name, description, embedding, metadata)
+                    VALUES (%s, %s, %s, %s, %s::vector, %s::jsonb)
+                    """,
+                    (
+                        source_name,
+                        tbl.name,
+                        col.name,
+                        text,
+                        _to_pgvector(vec),
+                        json.dumps(col_meta, ensure_ascii=False),
+                    ),
+                )
+        logger.info(
+            "indexed %s: %d tables + %d columns",
+            source_name,
+            len(tables),
+            len(column_rows),
+        )
+        return len(tables) + len(column_rows)
 
     def search(
         self,
@@ -414,6 +474,11 @@ class Embedder:
 
         If ``source_name`` is given, results are restricted to that source.
         ``None`` searches across all sources (only useful for diagnostics).
+
+        This preserves the legacy signature used by ``HybridRetriever`` —
+        v0.5.0 added column-level rows to ``schema_embeddings`` but this
+        method still only returns table-level matches. Use
+        :meth:`search_mixed` when the caller needs column-level hits.
         """
         vec_literal = _to_pgvector(self.embed(query))
         with get_cursor(dict_rows=True) as cur:
@@ -444,3 +509,166 @@ class Embedder:
                 )
             rows = cur.fetchall()
         return [(row["table_name"], float(row["score"])) for row in rows]
+
+    def search_mixed(
+        self,
+        query: str,
+        top_n: int = 20,
+        *,
+        source_name: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Search returning both table-level and column-level hits separately.
+
+        Returns a dict with two keys::
+
+            {
+                "tables":  [{table_name, score}, ...],
+                "columns": [{table_name, column_name, score}, ...],
+            }
+
+        Used by ``HybridRetriever`` to merge column-level hits back into
+        their parent table score (with a configurable weight).
+        """
+        from typing import Any as _Any  # noqa: WPS433 — avoid unused import warning
+
+        vec_literal = _to_pgvector(self.embed(query))
+        tables_out: list[dict[str, _Any]] = []
+        cols_out: list[dict[str, _Any]] = []
+
+        with get_cursor(dict_rows=True) as cur:
+            if source_name:
+                cur.execute(
+                    """
+                    SELECT table_name, column_name,
+                           1 - (embedding <=> %s::vector) AS score
+                    FROM schema_embeddings
+                    WHERE source_name = %s
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (vec_literal, source_name, vec_literal, top_n * 2),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT table_name, column_name,
+                           1 - (embedding <=> %s::vector) AS score
+                    FROM schema_embeddings
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (vec_literal, vec_literal, top_n * 2),
+                )
+            for row in cur.fetchall():
+                entry = {
+                    "table_name": row["table_name"],
+                    "score": float(row["score"]),
+                }
+                if row["column_name"] is None:
+                    tables_out.append(entry)
+                else:
+                    entry["column_name"] = row["column_name"]
+                    cols_out.append(entry)
+
+        return {"tables": tables_out[:top_n], "columns": cols_out[:top_n]}
+
+    # ----- v0.5.0: experience pool + feedback + conversation summary --------
+
+    def bootstrap_experience_tables(self) -> None:
+        """Ensure embedding columns on v0.5.0 tables match the current dim.
+
+        The base DDL (``db/migrations/002_observability_and_evolution.sql``)
+        creates ``experience_pool`` / ``query_feedback`` / ``conversation_summary``
+        without any ``embedding`` column, because pgvector columns are
+        strongly typed on dim and the dim is only known at runtime (after the
+        embedder provider has been resolved).
+
+        This method:
+            1. Detects the current dim of any existing ``embedding`` column.
+            2. If the dim doesn't match ``self.dim``, drops the stale column.
+            3. Adds ``embedding vector(self.dim)`` if missing.
+            4. Creates HNSW indexes.
+
+        Only ``experience_pool`` and ``query_feedback`` get embedding columns;
+        ``conversation_summary`` stores plain text (cross-session similarity
+        retrieval is reserved for a future extension).
+        """
+        target_dim = self.dim
+        with get_cursor(dict_rows=True) as cur:
+            for table in ("experience_pool", "query_feedback"):
+                # Does the column already exist, and what's its declared dim?
+                cur.execute(
+                    """
+                    SELECT udt_name, atttypmod
+                    FROM information_schema.columns
+                    JOIN pg_attribute
+                        ON pg_attribute.attrelid = (%s::regclass)
+                       AND pg_attribute.attname = columns.column_name
+                    WHERE columns.table_name = %s AND columns.column_name = 'embedding'
+                    """,
+                    (table, table),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    # Parse the dim from the udt_name (e.g. "vector" doesn't
+                    # include it; need to query pg_type/pg_attribute). The
+                    # simpler path: try a cheap `SELECT` on one row with a
+                    # zero vector of target_dim — if the dim is wrong, pgvector
+                    # raises and we drop+re-add. We instead just compare via
+                    # a second query that hits ``format_type``.
+                    cur.execute(
+                        """
+                        SELECT format_type(a.atttypid, a.atttypmod) AS col_type
+                        FROM pg_attribute a
+                        JOIN pg_class c ON a.attrelid = c.oid
+                        WHERE c.relname = %s AND a.attname = 'embedding'
+                        """,
+                        (table,),
+                    )
+                    type_row = cur.fetchone()
+                    current_type = (type_row or {}).get("col_type", "")
+                    # current_type looks like "vector(512)" — parse the dim
+                    current_dim: int | None = None
+                    if current_type and "(" in current_type and ")" in current_type:
+                        try:
+                            current_dim = int(
+                                current_type[
+                                    current_type.rindex("(") + 1 : current_type.rindex(")")
+                                ]
+                            )
+                        except ValueError:
+                            current_dim = None
+
+                    if current_dim != target_dim:
+                        logger.info(
+                            "%s.embedding dim mismatch (%s vs %d); dropping and re-adding",
+                            table,
+                            current_dim,
+                            target_dim,
+                        )
+                        cur.execute(f"ALTER TABLE {table} DROP COLUMN embedding")
+                    else:
+                        # Already correct — ensure index exists and move on
+                        cur.execute(
+                            f"""
+                            CREATE INDEX IF NOT EXISTS {table}_embedding_hnsw
+                            ON {table} USING hnsw (embedding vector_cosine_ops)
+                            """
+                        )
+                        continue
+
+                # Add the embedding column with the current dim
+                cur.execute(
+                    f"ALTER TABLE {table} ADD COLUMN embedding vector({target_dim})"
+                )
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS {table}_embedding_hnsw
+                    ON {table} USING hnsw (embedding vector_cosine_ops)
+                    """
+                )
+                logger.info(
+                    "bootstrapped %s.embedding as vector(%d) + HNSW index",
+                    table,
+                    target_dim,
+                )

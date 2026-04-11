@@ -68,6 +68,24 @@ DIALECT_SCHEMAS: dict[str, dict[str, Any]] = {
              "required": False},
         ],
     },
+    "clickhouse": {
+        "label": "ClickHouse",
+        "description": "列式 OLAP 引擎，字节/快手/B站同款",
+        "fields": [
+            {"key": "host", "label": "Host", "type": "string",
+             "required": True, "default": "localhost"},
+            {"key": "port", "label": "HTTP Port", "type": "int",
+             "required": True, "default": 8123,
+             "help": "HTTP 接口端口（不是 native 9000）"},
+            {"key": "database", "label": "Database", "type": "string",
+             "required": True, "default": "elytra"},
+            {"key": "user", "label": "User", "type": "string",
+             "required": True, "default": "default"},
+            {"key": "password", "label": "Password", "type": "password",
+             "required": False,
+             "help": "默认 default 用户无密码"},
+        ],
+    },
 }
 
 
@@ -93,9 +111,13 @@ def _resolve_class(dialect: str) -> Type[DataSourceConnector]:
         from src.connectors.starrocks_connector import StarRocksConnector
 
         return StarRocksConnector
+    if dialect == "clickhouse":
+        from src.connectors.clickhouse_connector import ClickHouseConnector
+
+        return ClickHouseConnector
     raise ValueError(
         f"Unsupported dialect: {dialect!r}. "
-        f"Supported: postgresql / duckdb / starrocks"
+        f"Supported: postgresql / duckdb / starrocks / clickhouse"
     )
 
 

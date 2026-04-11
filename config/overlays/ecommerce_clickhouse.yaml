@@ -1,0 +1,43 @@
+# ClickHouse 电商数仓 schema overlay.
+#
+# 表名与 ecommerce_pg 保持一致，layer 约定也沿用 ODS/DWD/DWS 三层。
+# 引擎字段类型由 ClickHouseConnector 的类型映射决定，overlay 只补中文描述
+# 与常见查询范例，不覆盖 type。
+
+tables:
+  ods_orders:
+    chinese_name: 原始订单表
+    description: 下单流水原始数据（MergeTree 按 order_id 排序）
+    layer: ODS
+
+  ods_users:
+    chinese_name: 原始用户表
+    description: 用户注册信息原始数据
+    layer: ODS
+
+  ods_products:
+    chinese_name: 原始商品表
+    description: 商品基础信息原始数据
+    layer: ODS
+
+  dwd_order_detail:
+    chinese_name: 订单明细宽表
+    description: 订单 + 用户 + 商品维度补全的宽表，按月分区
+    layer: DWD
+    common_queries:
+      - "上个月各品类的销售额"
+      - "金牌用户的客单价"
+      - "最近 7 天每天的订单数"
+
+  dws_daily_sales:
+    chinese_name: 每日品类销售聚合表
+    description: 按日 × 品类预聚合（SummingMergeTree），查询时应主动 GROUP BY + sum
+    layer: DWS
+    common_queries:
+      - "上个月每日销售趋势"
+      - "各品类累计销售额"
+
+  dws_user_activity:
+    chinese_name: 用户活跃度聚合表
+    description: 按日 × 用户等级预聚合的活跃用户数与订单数（SummingMergeTree）
+    layer: DWS

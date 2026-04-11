@@ -213,9 +213,63 @@ def get_audit_stats(
             )
             by_user = {r["user_id"]: r["cnt"] for r in cur.fetchall()}
 
+            # Top errors by canonical error_type
+            cur.execute(
+                """
+                SELECT error_type, COUNT(*) AS cnt
+                FROM query_history
+                WHERE created_at >= %s AND error_type IS NOT NULL
+                GROUP BY error_type
+                ORDER BY cnt DESC
+                LIMIT 10
+                """,
+                (cutoff,),
+            )
+            top_errors = [
+                {"error_type": r["error_type"], "count": r["cnt"]}
+                for r in cur.fetchall()
+            ]
+
+            # Daily time series — bucket by Asia/Shanghai local date
+            cur.execute(
+                """
+                SELECT DATE(created_at AT TIME ZONE 'Asia/Shanghai') AS day,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE execution_success = TRUE) AS successes
+                FROM query_history
+                WHERE created_at >= %s
+                GROUP BY day
+                ORDER BY day
+                """,
+                (cutoff,),
+            )
+            raw_daily = {
+                r["day"]: {
+                    "total": int(r["total"] or 0),
+                    "successes": int(r["successes"] or 0),
+                }
+                for r in cur.fetchall()
+            }
+
     except Exception as exc:  # noqa: BLE001
         logger.exception("audit stats query failed")
         raise HTTPException(status_code=500, detail=f"stats query failed: {exc}") from exc
+
+    # Backfill zero-count days so the frontend line chart is contiguous
+    today = datetime.now(tz=None).date()
+    start_date = (datetime.now(tz=None) - timedelta(days=days - 1)).date()
+    time_series: list[dict[str, Any]] = []
+    cursor_date = start_date
+    while cursor_date <= today:
+        bucket = raw_daily.get(cursor_date, {"total": 0, "successes": 0})
+        time_series.append(
+            {
+                "date": cursor_date.isoformat(),
+                "total": bucket["total"],
+                "successes": bucket["successes"],
+            }
+        )
+        cursor_date += timedelta(days=1)
 
     return AuditStatsResponse(
         period=f"{period_start} ~ {period_end}",
@@ -227,4 +281,6 @@ def get_audit_stats(
         by_intent=by_intent,
         by_source=by_source,
         by_user=by_user,
+        top_errors=top_errors,
+        time_series=time_series,
     )

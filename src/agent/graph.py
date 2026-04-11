@@ -33,6 +33,7 @@ the prompt-switching logic in exactly one place.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Literal
 
@@ -41,17 +42,27 @@ from langgraph.graph import END, START, StateGraph
 from src.agent.nodes.chart_generator import generate_chart_node
 from src.agent.nodes.intent_classifier import classify_intent_node
 from src.agent.nodes.permission_filter import filter_by_permission_node
+from src.agent.nodes.resolve_context import resolve_context_node
 from src.agent.nodes.result_formatter import (
     format_clarification_node,
     format_error_node,
     format_result_node,
 )
+from src.agent.nodes.retrieve_experience import retrieve_experience_node
+from src.agent.nodes.save_experience import save_experience_node
 from src.agent.nodes.schema_retrieval import retrieve_schema_node
 from src.agent.nodes.self_correction import self_correction_node
 from src.agent.nodes.sql_executor import execute_sql_node
 from src.agent.nodes.sql_generator import generate_sql_node
+from src.agent.nodes.summarize_conversation import (
+    MIN_TURNS_FOR_SUMMARY,
+    summarize_conversation_node,
+)
 from src.config import settings
 from src.models.state import AgentState, make_initial_state
+from src.observability.sanitizer import SanitizerAction, sanitize_user_query
+
+logger_graph = logging.getLogger(__name__)
 
 
 # ----- Conditional edge functions ------------------------------------------
@@ -71,6 +82,43 @@ def _route_after_execute(
     return "give_up"
 
 
+def _route_after_format(
+    state: AgentState,
+) -> Literal["save", "skip"]:
+    """Should we fire save_experience before moving to generate_chart?
+
+    Only if the query ran successfully AND went through at least one
+    self-correction cycle. A first-try success has nothing to learn from
+    and writing it would pollute the experience pool.
+    """
+    if state.get("execution_success") and state.get("retry_count", 0) > 0:
+        return "save"
+    return "skip"
+
+
+def _route_before_end(
+    state: AgentState,
+) -> Literal["summarize", "skip"]:
+    """Should we compress the conversation before returning?
+
+    Only when the session has enough prior successful turns that a
+    summary would actually help subsequent queries. The threshold
+    matches ``MIN_TURNS_FOR_SUMMARY`` in summarize_conversation.
+    """
+    if not state.get("execution_success"):
+        return "skip"
+    if not state.get("session_id"):
+        return "skip"
+    # The current turn plus N-1 prior turns from conversation_history
+    # = MIN_TURNS_FOR_SUMMARY. conversation_history was populated by
+    # resolve_context at the top of this run, so it already reflects
+    # what was in query_history when the query started.
+    prior = len(state.get("conversation_history") or [])
+    if prior + 1 >= MIN_TURNS_FOR_SUMMARY:
+        return "summarize"
+    return "skip"
+
+
 # ----- Graph builder --------------------------------------------------------
 
 
@@ -79,13 +127,17 @@ def build_agent_graph():
     graph = StateGraph(AgentState)
 
     graph.add_node("classify_intent", classify_intent_node)
+    graph.add_node("resolve_context", resolve_context_node)
     graph.add_node("retrieve_schema", retrieve_schema_node)
     graph.add_node("filter_by_permission", filter_by_permission_node)
+    graph.add_node("retrieve_experience", retrieve_experience_node)
     graph.add_node("generate_sql", generate_sql_node)
     graph.add_node("execute_sql", execute_sql_node)
     graph.add_node("self_correction", self_correction_node)
     graph.add_node("format_result", format_result_node)
+    graph.add_node("save_experience", save_experience_node)
     graph.add_node("generate_chart", generate_chart_node)
+    graph.add_node("summarize_conversation", summarize_conversation_node)
     graph.add_node("format_error", format_error_node)
     graph.add_node("format_clarification", format_clarification_node)
 
@@ -96,12 +148,17 @@ def build_agent_graph():
         _route_after_intent,
         {
             "clarify": "format_clarification",
-            "continue": "retrieve_schema",
+            "continue": "resolve_context",
         },
     )
 
+    # v0.5.0: resolve_context runs before schema retrieval so downstream
+    # nodes (including retrieve_schema's BM25 + vector search) can see the
+    # conversation summary if one exists.
+    graph.add_edge("resolve_context", "retrieve_schema")
     graph.add_edge("retrieve_schema", "filter_by_permission")
-    graph.add_edge("filter_by_permission", "generate_sql")
+    graph.add_edge("filter_by_permission", "retrieve_experience")
+    graph.add_edge("retrieve_experience", "generate_sql")
     graph.add_edge("generate_sql", "execute_sql")
 
     graph.add_conditional_edges(
@@ -115,8 +172,32 @@ def build_agent_graph():
     )
 
     graph.add_edge("self_correction", "generate_sql")
-    graph.add_edge("format_result", "generate_chart")
-    graph.add_edge("generate_chart", END)
+
+    # v0.5.0: conditional fork — only visit save_experience when the run
+    # actually self-corrected. First-try successes skip directly to chart.
+    graph.add_conditional_edges(
+        "format_result",
+        _route_after_format,
+        {
+            "save": "save_experience",
+            "skip": "generate_chart",
+        },
+    )
+    graph.add_edge("save_experience", "generate_chart")
+
+    # v0.5.0: conditional fork at the end — summarize conversation if the
+    # session has accumulated enough turns. First-turn / short sessions
+    # skip this to save tokens.
+    graph.add_conditional_edges(
+        "generate_chart",
+        _route_before_end,
+        {
+            "summarize": "summarize_conversation",
+            "skip": END,
+        },
+    )
+    graph.add_edge("summarize_conversation", END)
+
     graph.add_edge("format_error", END)
     graph.add_edge("format_clarification", END)
 
@@ -145,7 +226,14 @@ async def run_agent_async(
 
     Latency is measured here (not inside any node) so it always reflects the
     total wall-clock time of the request.
+
+    Input is sanitized before the graph is invoked. A ``REJECT`` verdict
+    short-circuits the request with a ``prompt_injection`` error state so
+    the rest of the pipeline (retrieval, generation, execution) never sees
+    the hostile input.
     """
+    sanitized = sanitize_user_query(user_query)
+
     initial = make_initial_state(
         user_query=user_query,
         session_id=session_id,
@@ -153,9 +241,31 @@ async def run_agent_async(
         active_source=active_source,
         user_id=user_id,
     )
+    initial["sanitized_query"] = sanitized.cleaned
+    initial["sanitizer_violations"] = list(sanitized.violations)
+
+    if sanitized.action == SanitizerAction.REJECT:
+        logger_graph.warning(
+            "sanitizer rejected query: violations=%s", sanitized.violations
+        )
+        initial["execution_success"] = False
+        initial["execution_error"] = (
+            f"Query rejected by input sanitizer: {', '.join(sanitized.violations)}"
+        )
+        initial["final_answer"] = "输入未通过安全检查，请重新描述你的问题。"
+        initial["intent"] = "simple_query"
+        return initial  # type: ignore[return-value]
+
+    if sanitized.action == SanitizerAction.WARN:
+        logger_graph.info(
+            "sanitizer warn: violations=%s", sanitized.violations
+        )
+
     t0 = time.perf_counter()
     final_state = await agent_graph.ainvoke(initial)
     final_state["latency_ms"] = int((time.perf_counter() - t0) * 1000)
+    # Propagate sanitizer metadata out of the graph
+    final_state["sanitizer_violations"] = list(sanitized.violations)
     return final_state  # type: ignore[return-value]
 
 

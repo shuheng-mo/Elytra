@@ -104,14 +104,14 @@ flowchart TB
         Result["format_result"]
         Err["format_error"]
 
-        Intent -- "intent = clarification" --> Clarify
+        Intent -- "needs clarification" --> Clarify
         Intent -- "other intents" --> Retrieve
         Retrieve --> Gen
         Gen --> Exec
         Exec -- "success" --> Result
-        Exec -- "failure & retry < MAX" --> Correct
+        Exec -- "failure, retries left" --> Correct
         Correct --> Gen
-        Exec -- "failure & retry == MAX" --> Err
+        Exec -- "failure, retries exhausted" --> Err
     end
 
     subgraph Sub["Core subsystems"]
@@ -140,9 +140,9 @@ flowchart TB
     Exec --> Safety
     Safety --> PG
 
-    Clarify --> END0(["END"])
-    Result --> END0
-    Err --> END0
+    Clarify --> Done(["END"])
+    Result --> Done
+    Err --> Done
 ```
 
 ---
@@ -755,13 +755,17 @@ Delivered (v0.4.0):
 - [x] **Token cost tracking** — `src/agent/cost.py` blended per-1M-token rates persist into `query_history.estimated_cost`; also fixes a latent bug where async-mode runs were never persisted (`task_manager` now takes a decoupled `persist_fn`)
 - [x] **Multi-format export** — Excel + CSV buttons on Schema / History / Audit pages; Settings ships a session-scoped multi-sheet xlsx bundle export
 
+Delivered (v0.5.0):
+
+- [x] **Multi-turn dialogue (full form)** — new LangGraph nodes `resolve_context` and `summarize_conversation`; `query_history.session_id` is the single source of truth; the `conversation_summary` table auto-writes an LLM-compressed recap once the session has ≥ 3 successful turns; the React QueryPage is now a linear ChatGPT-style thread with a "New conversation" button and session indicator
+- [x] **Local reranker + column-level retrieval** — `BAAI/bge-reranker-v2-m3` cross-encoder wrapped in a `make_reranker()` factory that picks `auto` / `local` / `llm` from `RERANKER_PROVIDER` (default `llm` to keep latency low; the local model is an explicit opt-in); `schema_embeddings` now indexes both table-level and column-level rows (each source picks up 50–150 extra column rows), and `HybridRetriever` merges column hits back into their parent table with a 0.6 weight; the long-standing `LLMReranker` OpenRouter-bypass bug is fixed in passing
+- [x] **Observability (minimal loop)** — new `src/observability/errors.py` with an `ErrorType` enum and `classify_error()` wired into `self_correction`; the new `query_history.error_type` column powers `top_errors` aggregation in the audit dashboard; `src/observability/sanitizer.py` gates `run_agent_async` with five rules (length cap / jailbreak phrases / role reversal / SQL-keyword density / markdown fences)
+- [x] **Daily query trend** — `AuditStatsResponse.time_series` aggregates totals + successes per day with Python-side zero-fill so the frontend line chart is contiguous; `AuditDashboard` replaces the placeholder with ECharts `line` and gains three self-evolution KPI cards
+- [x] **Agent self-evolution** — `experience_pool` and `query_feedback` pgvector tables with an `embedding` column injected at runtime by `Embedder.bootstrap_experience_tables()` (detects dim mismatch and drops the stale column automatically); `retrieve_experience` / `save_experience` nodes are conditionally activated on the success-after-retry path; `POST /api/feedback` + `GET /api/evolution/stats` + React `FeedbackButtons` close the UI loop; a single `PromptContext` dataclass unifies the injection point for dynamic few-shot examples and conversation context
+
 Next-phase highlights:
 
-- [ ] **Multi-turn dialogue** — `conversation_history` + context summarization + anaphora resolution
-- [ ] **Local cross-encoder reranker** — `bge-reranker-v2-m3` replacing the LLM reranker; column-level retrieval
 - [ ] **Tool-use Agent** — upgrade to function-calling mode
-- [ ] **Observability** — structured per-query trace, error classification, prompt-injection hardening
-- [ ] **Daily query trend** — add a `time_series` field to `AuditStatsResponse` and wire up the placeholder line chart in the React audit dashboard
 
 ---
 

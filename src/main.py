@@ -22,7 +22,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.audit import router as audit_router
+from src.api.conversation import router as conversation_router
 from src.api.datasources import router as datasources_router
+from src.api.evolution import router as evolution_router
+from src.api.feedback import router as feedback_router
 from src.api.history import router as history_router
 from src.api.query import router as query_router
 from src.api.query_async import router as async_query_router
@@ -111,4 +114,7 @@ app.include_router(schema_router)
 app.include_router(history_router)
 app.include_router(datasources_router)
 app.include_router(audit_router)
+app.include_router(feedback_router)
+app.include_router(evolution_router)
+app.include_router(conversation_router)
 app.include_router(ws_router)

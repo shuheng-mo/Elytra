@@ -97,10 +97,64 @@ function barOption(title, dataObj) {
   };
 }
 
+function timeSeriesOption(series) {
+  const points = series || [];
+  const dates = points.map((p) => (p.date || '').slice(5)); // MM-DD
+  const totals = points.map((p) => Number(p.total || 0));
+  const successes = points.map((p) => Number(p.successes || 0));
+  return {
+    backgroundColor: 'transparent',
+    color: palette,
+    tooltip: { trigger: 'axis' },
+    legend: {
+      data: ['总查询数', '成功数'],
+      textStyle: darkTextStyle,
+      top: 0,
+    },
+    grid: { left: 50, right: 20, top: 30, bottom: 30 },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLine,
+      axisLabel: darkTextStyle,
+      boundaryGap: false,
+    },
+    yAxis: {
+      type: 'value',
+      axisLine,
+      axisLabel: darkTextStyle,
+      splitLine: gridLine,
+      minInterval: 1,
+    },
+    series: [
+      {
+        name: '总查询数',
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 6,
+        itemStyle: { color: palette[0] },
+        areaStyle: { color: 'rgba(88,166,255,0.15)' },
+        data: totals,
+      },
+      {
+        name: '成功数',
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 6,
+        itemStyle: { color: palette[1] },
+        data: successes,
+      },
+    ],
+  };
+}
+
 export function AuditDashboard() {
   const [days, setDays] = useState(7);
   const [stats, setStats] = useState(null);
   const [history, setHistory] = useState([]);
+  const [evolution, setEvolution] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -108,12 +162,14 @@ export function AuditDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [s, h] = await Promise.all([
+      const [s, h, e] = await Promise.all([
         api.getAuditStats(days),
         api.getHistory({ limit: 20 }),
+        api.getEvolutionStats().catch(() => null),
       ]);
       setStats(s);
       setHistory(h.history || []);
+      setEvolution(e);
     } catch (err) {
       setError(err.message || String(err));
     } finally {
@@ -197,6 +253,39 @@ export function AuditDashboard() {
         ) : null}
       </div>
 
+      {/* Self-evolution cards (v0.5.0) */}
+      {evolution && !loading && (
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <KpiCard
+            title="积累经验"
+            value={evolution.experience_pool?.total ?? 0}
+            hint={`检索命中 ${evolution.experience_pool?.retrievals ?? 0} 次`}
+          />
+          <KpiCard
+            title="用户好评率"
+            value={
+              evolution.user_feedback?.total_positive + evolution.user_feedback?.total_negative > 0
+                ? `${((evolution.user_feedback?.approval_rate ?? 0) * 100).toFixed(1)}%`
+                : '—'
+            }
+            hint={`${evolution.user_feedback?.total_positive ?? 0} 👍 / ${evolution.user_feedback?.total_negative ?? 0} 👎`}
+          />
+          <KpiCard
+            title="首发成功率变化"
+            value={
+              evolution.evolution_impact?.improvement != null
+                ? `${evolution.evolution_impact.improvement >= 0 ? '+' : ''}${evolution.evolution_impact.improvement}%`
+                : '—'
+            }
+            hint={
+              evolution.evolution_impact?.improvement != null
+                ? `经验沉淀前 ${((evolution.evolution_impact.before ?? 0) * 100).toFixed(0)}% → 后 ${((evolution.evolution_impact.after ?? 0) * 100).toFixed(0)}%`
+                : evolution.evolution_impact?.note || '样本不足'
+            }
+          />
+        </div>
+      )}
+
       {/* Charts */}
       {stats && !loading && (
         <>
@@ -242,12 +331,19 @@ export function AuditDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>每日查询趋势</CardTitle>
-                <CardDescription>待后端补 time_series 接口</CardDescription>
+                <CardDescription>按天聚合的总量 vs 成功数</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex h-[220px] items-center justify-center rounded-md border border-dashed border-[var(--border-color)] text-xs text-[var(--text-muted)]">
-                  占位 · 等待后端提供按天聚合数据
-                </div>
+                {stats.time_series && stats.time_series.length > 0 ? (
+                  <ReactECharts
+                    option={timeSeriesOption(stats.time_series)}
+                    style={{ height: '220px' }}
+                  />
+                ) : (
+                  <div className="flex h-[220px] items-center justify-center rounded-md border border-dashed border-[var(--border-color)] text-xs text-[var(--text-muted)]">
+                    所选时间段内暂无数据
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>

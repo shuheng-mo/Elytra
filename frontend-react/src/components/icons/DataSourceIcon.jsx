@@ -20,6 +20,13 @@ const ICONS = {
     // Stylized star-rocket (the SR logo is a star overlaid with upward lines)
     path: 'M12 2l2.39 4.84 5.34.78-3.86 3.77.91 5.32L12 14.2l-4.78 2.51.91-5.32L4.27 7.62l5.34-.78L12 2zm0 11.5l2.76 1.45-.53-3.07 2.23-2.17-3.08-.45L12 6.48l-1.38 2.78-3.08.45 2.23 2.17-.53 3.07L12 13.5z',
   },
+  clickhouse: {
+    label: 'ClickHouse',
+    color: '#FFCC01',
+    // ClickHouse brand mark: five vertical bars with the 4th bar half-height
+    // (evokes columnar storage). 24x24 viewBox, left-aligned.
+    path: 'M3 3h3v18H3zM8 3h3v18H8zM13 3h3v18h-3zM18 3h3v9h-3zM18 15h3v6h-3z',
+  },
   hiveql: {
     label: 'MaxCompute',
     color: '#FF6A00',

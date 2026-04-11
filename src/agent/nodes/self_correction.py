@@ -15,24 +15,37 @@ from __future__ import annotations
 import logging
 
 from src.models.state import AgentState
+from src.observability.errors import classify_error
 
 logger = logging.getLogger(__name__)
 
 
 def self_correction_node(state: AgentState) -> dict:
-    """LangGraph node: bumps retry counter and appends to correction history."""
+    """LangGraph node: bumps retry counter and appends to correction history.
+
+    Also classifies the error into a canonical ``ErrorType`` and stashes it
+    on the correction record so downstream consumers (experience pool,
+    audit ``top_errors``) don't re-parse the message.
+    """
     failed_sql = state.get("generated_sql", "")
     error = state.get("execution_error", "") or "(unknown error)"
+    error_type = classify_error(error)
     history = list(state.get("correction_history", []))
     history.append(
         {
             "sql": failed_sql,
             "error": error,
             "feedback": "retrying with self-correction prompt",
+            "error_type": error_type.value,
         }
     )
     new_retry = state.get("retry_count", 0) + 1
-    logger.info("self_correction: retry %d, last error: %s", new_retry, error[:120])
+    logger.info(
+        "self_correction: retry %d, error_type=%s, last error: %s",
+        new_retry,
+        error_type.value,
+        error[:120],
+    )
     return {
         "retry_count": new_retry,
         "correction_history": history,

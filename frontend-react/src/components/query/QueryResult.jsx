@@ -2,6 +2,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { ScrollArea } from '../ui/scroll-area';
 import { ChartRenderer } from './ChartRenderer';
+import { FeedbackButtons } from './FeedbackButtons';
 
 function DataTable({ rows }) {
   if (!rows || rows.length === 0) {
@@ -46,7 +47,7 @@ function DataTable({ rows }) {
   );
 }
 
-export function QueryResult({ rows, chartSpec, finalAnswer }) {
+export function QueryResult({ rows, chartSpec, finalAnswer, historyId }) {
   const hasChart = !!chartSpec;
   const rowCount = rows?.length ?? 0;
 
@@ -76,6 +77,12 @@ export function QueryResult({ rows, chartSpec, finalAnswer }) {
           </TabsContent>
         )}
       </Tabs>
+
+      {historyId != null && (
+        <div className="pt-2">
+          <FeedbackButtons historyId={historyId} />
+        </div>
+      )}
     </div>
   );
 }

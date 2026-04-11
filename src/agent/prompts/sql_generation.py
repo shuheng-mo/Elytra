@@ -7,7 +7,18 @@ specific so the model is biased toward the right pattern.
 Dialect-specific syntax instructions are appended via ``DIALECT_INSTRUCTIONS``
 so the same agent can target PostgreSQL, DuckDB, or StarRocks (MySQL-compatible)
 without changing the system prompt.
+
+v0.5.0 introduces :class:`PromptContext`, a single dataclass that the sql
+generator node fills in and passes to :func:`build_sql_generation_prompt`.
+This lets self-evolution (dynamic few-shot from experience pool) and
+multi-turn dialog (conversation context block) plug in new content without
+requiring a new signature for every feature.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Shared rules (dialect-neutral)
@@ -48,6 +59,24 @@ DIALECT_INSTRUCTIONS: dict[str, str] = {
 - **不支持 `ILIKE`**，用 `LOWER(col) LIKE LOWER('%pattern%')` 替代
 - 分页用 `LIMIT offset, count` 或 `LIMIT count OFFSET offset`
 - 不支持 `WITH RECURSIVE`""",
+    "clickhouse": """## ClickHouse 方言要求
+- 月份截断用 `toStartOfMonth(col)`，**不支持 `DATE_TRUNC('month', col)`**
+- 周截断用 `toMonday(col)`，年截断用 `toStartOfYear(col)`
+- 日期格式化用 `formatDateTime(col, '%Y-%m-%d')`，**不支持 `TO_CHAR`**
+- 当前日期用 `today()`，**不是 `CURRENT_DATE`**；当前时间用 `now()`
+- 日期加减用 `col - INTERVAL 1 MONTH` 或 `addDays(col, 7)` / `subtractMonths(col, 1)`
+- 字符串拼接用 `concat(a, b, c)`，**不支持 `||`**
+- 大小写转换用 `lower()` / `upper()`
+- 子串用 `substring(col, start, length)` 或 `position(col, 'pattern')`
+- **不支持 `ILIKE`**，用 `lower(col) LIKE lower('%pattern%')` 或 `positionCaseInsensitive()`
+- 空值处理用 `ifNull(col, default)`，也可以用 `coalesce()`
+- 条件表达式用 `if(cond, then, else)` 或标准的 `CASE WHEN`
+- 整数除法默认取整，浮点结果用 `col1 * 1.0 / col2`
+- 聚合去重优先用 `uniqExact(col)`（精确）或 `uniq(col)`（近似，快 10 倍 ~2% 误差），避免 `COUNT(DISTINCT col)` 性能差
+- 分页用 `LIMIT n OFFSET m`
+- NULL 排序默认靠前，如需靠后用 `ORDER BY col NULLS LAST`
+- SummingMergeTree 聚合结果查询时应主动 `GROUP BY` + `sum(...)`，或表名后加 ` FINAL`
+- **不支持 UPDATE / DELETE / 事务 / 递归 CTE**（MergeTree 引擎限制）""",
     "hiveql": """## HiveQL 方言要求
 - 字符串拼接用 `CONCAT(a, b)`
 - 日期函数：`DATE_FORMAT` / `FROM_UNIXTIME`
@@ -167,29 +196,169 @@ _TEMPLATES_BY_INTENT = {
 SYSTEM_PROMPT = "你是一个专业的数据分析师。根据用户的自然语言问题和提供的 Schema，生成准确的 SQL 查询。严格按照下方指定的 SQL 方言书写。"
 
 
+# ---------------------------------------------------------------------------
+# v0.5.0 PromptContext — single struct that carries everything the prompt
+# builder might need. Features add fields instead of new function signatures.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PromptContext:
+    user_query: str
+    retrieved_schemas: str
+    intent: str = "aggregation"
+    dialect: str = "postgresql"
+    # Self-evolution: dynamic few-shot from experience_pool + query_feedback
+    dynamic_examples: dict[str, Any] = field(default_factory=dict)
+    # Multi-turn: recent turns from query_history + compressed summary
+    conversation_history: list[dict[str, Any]] = field(default_factory=list)
+    context_summary: str | None = None
+
+
+def build_dynamic_few_shot_block(dynamic_examples: dict[str, Any]) -> str:
+    """Render the dynamic few-shot block from experience pool + feedback.
+
+    Phase 4b populates this with three groups:
+        - ``corrections``: past failure → fix pairs (avoid these mistakes)
+        - ``golden``: user-upvoted examples (these worked)
+        - ``negative``: user-downvoted examples (don't do this)
+
+    v0.5.0-phase4a: this function exists so sql_generator can already call it
+    even when the dict is empty. Once Phase 4b wires retrieve_experience, the
+    dict will be populated and the block will appear in the prompt.
+    """
+    if not dynamic_examples:
+        return ""
+
+    blocks: list[str] = []
+
+    golden = dynamic_examples.get("golden") or []
+    if golden:
+        blocks.append("## 参考：过去被验证正确的类似查询")
+        for ex in golden[:2]:
+            blocks.append(f"用户：{ex.get('user_query', '')}")
+            sql = ex.get("generated_sql") or ex.get("sql") or ""
+            blocks.append(f"SQL：{sql}")
+            blocks.append("")
+
+    corrections = dynamic_examples.get("corrections") or []
+    if corrections:
+        blocks.append("## 注意：以下是过去类似查询中常见的错误和修正")
+        for ex in corrections[:2]:
+            blocks.append(f"用户：{ex.get('user_query', '')}")
+            blocks.append(f"错误SQL：{ex.get('failed_sql', '')}")
+            blocks.append(f"错误原因：{ex.get('error_message', '')}")
+            blocks.append(f"正确SQL：{ex.get('corrected_sql', '')}")
+            blocks.append("")
+
+    negatives = dynamic_examples.get("negative") or []
+    if negatives:
+        blocks.append("## 警告：以下 SQL 曾被用户标记为错误，请避免类似写法")
+        for ex in negatives[:1]:
+            blocks.append(f"用户：{ex.get('user_query', '')}")
+            sql = ex.get("generated_sql") or ex.get("sql") or ""
+            blocks.append(f"被拒绝的SQL：{sql}")
+            blocks.append("")
+
+    return "\n".join(blocks).strip()
+
+
+def build_conversation_context_block(
+    history: list[dict[str, Any]],
+    summary: str | None,
+) -> str:
+    """Render the multi-turn conversation context block.
+
+    Phase 5 populates this from the resolve_context node, which reads the
+    last 3 successful turns from ``query_history`` by ``session_id`` plus
+    the current ``conversation_summary`` if one exists.
+    """
+    if not history and not summary:
+        return ""
+
+    blocks: list[str] = []
+    if summary:
+        blocks.append("## 对话摘要")
+        blocks.append(summary)
+        blocks.append("")
+
+    if history:
+        blocks.append("## 最近对话（按时间倒序，最近的在前）")
+        for turn in history[:3]:
+            q = turn.get("user_query") or turn.get("query") or ""
+            sql = turn.get("generated_sql") or turn.get("sql") or ""
+            blocks.append(f"用户：{q}")
+            if sql:
+                blocks.append(f"SQL：{sql}")
+            blocks.append("")
+
+    return "\n".join(blocks).strip()
+
+
 def build_sql_generation_prompt(
     user_query: str,
     retrieved_schemas: str,
     intent: str,
     dialect: str = "postgresql",
+    *,
+    dynamic_examples: dict[str, Any] | None = None,
+    conversation_history: list[dict[str, Any]] | None = None,
+    context_summary: str | None = None,
 ) -> list[dict[str, str]]:
     """Return a chat-completion ``messages`` list for SQL generation.
 
     The ``dialect`` argument controls which ``DIALECT_INSTRUCTIONS`` block is
     appended to the user content; few-shot examples remain shared because the
     business intent is dialect-independent.
+
+    New in v0.5.0: callers can pass ``dynamic_examples`` and conversation
+    context via kwargs. These slot in between the schema block and the
+    static few-shot so the LLM sees dynamic/recent context first, with the
+    static templates as a fallback. The prompt remains backward-compatible
+    — omit the kwargs to get the old behavior.
     """
     few_shot = _TEMPLATES_BY_INTENT.get(intent, _FEW_SHOT_AGGREGATION)
-    user_content = "\n\n".join(
-        [
-            _RULES,
-            _get_dialect_instructions(dialect),
-            _SCHEMA_BLOCK.format(retrieved_schemas=retrieved_schemas),
-            few_shot,
-            _USER_BLOCK.format(user_query=user_query),
-        ]
+
+    dynamic_block = build_dynamic_few_shot_block(dynamic_examples or {})
+    conversation_block = build_conversation_context_block(
+        conversation_history or [],
+        context_summary,
     )
+
+    parts = [
+        _RULES,
+        _get_dialect_instructions(dialect),
+        _SCHEMA_BLOCK.format(retrieved_schemas=retrieved_schemas),
+    ]
+    if dynamic_block:
+        parts.append(dynamic_block)
+    if conversation_block:
+        parts.append(conversation_block)
+    parts.append(few_shot)
+    parts.append(_USER_BLOCK.format(user_query=user_query))
+
+    user_content = "\n\n".join(parts)
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
+
+
+def build_sql_generation_prompt_from_context(
+    ctx: PromptContext,
+) -> list[dict[str, str]]:
+    """Dataclass-based wrapper — the preferred v0.5.0 call site.
+
+    Equivalent to :func:`build_sql_generation_prompt` but accepts a single
+    ``PromptContext`` so new fields can be added without touching every
+    caller.
+    """
+    return build_sql_generation_prompt(
+        user_query=ctx.user_query,
+        retrieved_schemas=ctx.retrieved_schemas,
+        intent=ctx.intent,
+        dialect=ctx.dialect,
+        dynamic_examples=ctx.dynamic_examples,
+        conversation_history=ctx.conversation_history,
+        context_summary=ctx.context_summary,
+    )

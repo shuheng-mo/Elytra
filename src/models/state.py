@@ -19,16 +19,19 @@ Intent = Literal[
 SqlDialect = Literal["postgresql", "duckdb", "starrocks", "hiveql", "sparksql"]
 
 
-class CorrectionAttempt(TypedDict):
+class CorrectionAttempt(TypedDict, total=False):
     sql: str
     error: str
     feedback: str
+    error_type: str  # ErrorType enum value; populated by self_correction node
 
 
 class AgentState(TypedDict, total=False):
     # ----- Inputs -----
     user_query: str
     session_id: str
+    sanitized_query: str  # output of sanitize_user_query, used by the agent
+    sanitizer_violations: list[str]  # rule names triggered during sanitization
 
     # ----- Intent classification -----
     intent: Intent
@@ -75,6 +78,11 @@ class AgentState(TypedDict, total=False):
     conversation_history: list[dict[str, Any]]
     context_summary: Optional[str]
 
+    # ----- v0.5.0 additions -----
+    dynamic_examples: dict[str, Any]  # {corrections, golden, negative} from experience pool
+    experience_saved: bool  # True if this run contributed a row to experience_pool
+    history_id: Optional[int]  # id returned by query_history INSERT ... RETURNING id
+
 
 def make_initial_state(
     user_query: str,
@@ -87,6 +95,8 @@ def make_initial_state(
     return AgentState(
         user_query=user_query,
         session_id=session_id,
+        sanitized_query=user_query,
+        sanitizer_violations=[],
         intent="simple_query",
         clarification_question=None,
         retrieved_schemas=[],
@@ -110,4 +120,7 @@ def make_initial_state(
         chart_spec=None,
         conversation_history=[],
         context_summary=None,
+        dynamic_examples={},
+        experience_saved=False,
+        history_id=None,
     )

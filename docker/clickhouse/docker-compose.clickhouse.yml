@@ -1,0 +1,39 @@
+# Elytra · ClickHouse (optional data source)
+#
+# Brings up a single-node ClickHouse server on localhost:8123 (HTTP) and
+# :9000 (native TCP). The init SQL at datasets/clickhouse/create_tables.sql
+# is auto-executed on the very first startup — re-run requires
+# `docker compose down -v` (destroys the `ch_data` volume) before `up -d`.
+#
+# Usage:
+#   docker compose -f docker/clickhouse/docker-compose.clickhouse.yml up -d
+#   python datasets/clickhouse/load_data.py
+#   .venv/bin/python -m src.retrieval.bootstrap --source ecommerce_clickhouse
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: elytra-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - ../../datasets/clickhouse/create_tables.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    environment:
+      CLICKHOUSE_DB: elytra
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ch_data:

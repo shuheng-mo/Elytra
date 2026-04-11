@@ -112,6 +112,18 @@ async def run_async(*, dry_run: bool = False, only_source: str | None = None) ->
         logger.info("recreating schema_embeddings table…")
         embedder.bootstrap_table()
 
+    # v0.5.0: ensure experience_pool and query_feedback have embedding
+    # columns at the current dim. Safe to run on every bootstrap — idempotent
+    # unless the dim changed, in which case the stale column is dropped.
+    if not dry_run:
+        try:
+            embedder.bootstrap_experience_tables()
+        except Exception as exc:  # noqa: BLE001 — evolution tables may not exist yet
+            logger.warning(
+                "bootstrap_experience_tables skipped (%s). Run migration 002 first.",
+                exc,
+            )
+
     total = 0
     for source_cfg in registry.raw_configs():
         name = source_cfg.get("name")

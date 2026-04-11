@@ -26,7 +26,7 @@ from src.config import settings
 from src.connectors.registry import ConnectorRegistry
 from src.models.state import AgentState
 from src.retrieval.hybrid_retriever import HybridRetriever
-from src.retrieval.reranker import LLMReranker
+from src.retrieval.reranker import RerankerLike, make_reranker
 from src.retrieval.schema_loader import SchemaLoader
 
 logger = logging.getLogger(__name__)
@@ -51,8 +51,8 @@ def _retriever_for_source(source_name: str) -> HybridRetriever:
 
 
 @lru_cache(maxsize=1)
-def _reranker() -> LLMReranker:
-    return LLMReranker()
+def _reranker() -> RerankerLike:
+    return make_reranker()
 
 
 def retrieve_schema_node(state: AgentState) -> dict:

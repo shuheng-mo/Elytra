@@ -33,6 +33,11 @@ class QueryResponse(BaseModel):
     tables_filtered: int = 0
     # Phase 2+ chart spec
     chart_spec: Optional[dict[str, Any]] = None
+    # v0.5.0 — history id for feedback submission, session id for multi-turn,
+    # sanitizer violations surfaced to the UI
+    history_id: Optional[int] = None
+    session_id: Optional[str] = None
+    sanitizer_violations: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -168,3 +173,5 @@ class AuditStatsResponse(BaseModel):
     by_source: dict[str, int] = Field(default_factory=dict)
     by_user: dict[str, int] = Field(default_factory=dict)
     top_errors: list[dict[str, Any]] = Field(default_factory=list)
+    # v0.5.0 — per-day query trend for the line chart on AuditDashboard
+    time_series: list[dict[str, Any]] = Field(default_factory=list)

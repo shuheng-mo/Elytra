@@ -102,14 +102,14 @@ flowchart TB
         Result["format_result"]
         Err["format_error"]
 
-        Intent -- "intent = clarification" --> Clarify
-        Intent -- "其他 intent" --> Retrieve
+        Intent -- "需要澄清" --> Clarify
+        Intent -- "其他意图" --> Retrieve
         Retrieve --> Gen
         Gen --> Exec
-        Exec -- "success" --> Result
-        Exec -- "failure & retry < MAX" --> Correct
+        Exec -- "成功" --> Result
+        Exec -- "失败且重试未达上限" --> Correct
         Correct --> Gen
-        Exec -- "failure & retry == MAX" --> Err
+        Exec -- "失败且重试已达上限" --> Err
     end
 
     subgraph Sub["核心子系统"]
@@ -138,9 +138,9 @@ flowchart TB
     Exec --> Safety
     Safety --> PG
 
-    Clarify --> END0(["END"])
-    Result --> END0
-    Err --> END0
+    Clarify --> Done(["END"])
+    Result --> Done
+    Err --> Done
 ```
 
 ---
@@ -717,13 +717,17 @@ python eval/run_eval.py --api-url http://localhost:8000 --filter aggregation
 - [x] **Token 成本追踪** — 新增 `src/agent/cost.py` 混合费率表，每次查询写入 `query_history.estimated_cost`；同时修复了异步任务从未持久化历史的 bug（`task_manager` 解耦了 `persist_fn`）
 - [x] **多格式导出** — Schema / History / Audit 三个页面都支持 Excel + CSV 导出；Settings 提供 session 级别的多 sheet xlsx 一次性打包
 
+已完成（v0.5.0）：
+
+- [x] **多轮对话（完整形式）** — `resolve_context` + `summarize_conversation` 两个 LangGraph 节点；`query_history.session_id` 作为单一真理源；`conversation_summary` 表在 turn 数 ≥ 3 后自动写入 LLM 压缩摘要；React QueryPage 重构为 ChatGPT 式线性对话流 + "新对话"按钮 + 会话指示器
+- [x] **本地 reranker + 列级检索** — `BAAI/bge-reranker-v2-m3` cross-encoder 加载，`make_reranker()` factory 按 `RERANKER_PROVIDER` 选 `auto/local/llm`（默认 `llm` 以保证低延迟，本地模型为显式可选）；`schema_embeddings` 同时索引表级 + 列级行（40/40 基线每源额外灌入 50-150 列），`HybridRetriever` 把列级命中以 0.6 系数合并回父表分数；顺带修复了 `LLMReranker` 旁路 OpenRouter 的老 bug
+- [x] **可观测性最小闭环** — `src/observability/errors.py` 引入 `ErrorType` 枚举（7 类）+ `classify_error()` 接入 `self_correction` 节点；`query_history.error_type` 新列驱动 `top_errors` 聚合；`src/observability/sanitizer.py` 5 条规则（长度上限 / 越狱短语 / 角色反转 / SQL 关键词密度 / markdown 代码块）在 `run_agent_async` 入口处拦截恶意输入
+- [x] **每日查询趋势** — `AuditStatsResponse.time_series` 按天聚合 total/successes，Python 侧补 0 天保证前端折线连贯；`AuditDashboard` 替换占位符为 ECharts `line`，同源加 3 个自我进化统计卡片
+- [x] **Agent 自我进化** — `experience_pool` + `query_feedback` 两张 pgvector 表，`embedding` 列由 `Embedder.bootstrap_experience_tables()` 在启动时注入当前 dim（维度错配时自动 DROP+ADD）；`retrieve_experience` / `save_experience` 两个新节点按自修正成功路径条件激活；`POST /api/feedback` + `GET /api/evolution/stats` + React `FeedbackButtons` 组件组成 UI 闭环；`PromptContext` dataclass 统一 dynamic few-shot + conversation context 注入点
+
 下一阶段主要特性：
 
-- [ ] **多轮对话** — `conversation_history` + 上下文摘要 + 指代消解
-- [ ] **本地 reranker** — `bge-reranker-v2-m3` 替代 LLM-as-Reranker，加字段级检索
 - [ ] **Tool-use Agent** — 升级为 function-calling 模式
-- [ ] **可观测性** — 结构化 trace、错误分类、prompt 注入加固
-- [ ] **每日查询趋势** — 给 `AuditStatsResponse` 加 `time_series` 字段，把 React 审计页那张占位的折线图接通
 
 ---
 
@@ -734,6 +738,7 @@ python eval/run_eval.py --api-url http://localhost:8000 --filter aggregation
 Elytra 的吞吐瓶颈在 LLM API 的请求速率限制，而非 CPU 或 I/O。单进程 asyncio 任务管理器配合 Semaphore 并发控制即可处理约 50 个并发查询，远超典型 BI 工具的使用模式。引入 Celery 会增加运维复杂度（broker 部署、worker 管理、结果后端），但不会带来有意义的吞吐提升。
 
 如果需要水平扩展，正确做法是：
+
 1. 多 API Key 轮换以突破单 key 速率限制
 2. 请求队列按优先级排序（交互查询 > 批量评测）
 3. 在结果层面缓存高频查询

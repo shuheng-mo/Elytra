@@ -22,7 +22,10 @@ import re
 from src.agent.llm import chat_complete
 from src.agent.nodes.schema_retrieval import render_schemas_for_prompt
 from src.agent.prompts.self_correction import build_self_correction_prompt
-from src.agent.prompts.sql_generation import build_sql_generation_prompt
+from src.agent.prompts.sql_generation import (
+    PromptContext,
+    build_sql_generation_prompt_from_context,
+)
 from src.models.state import AgentState
 from src.router.model_router import estimate_complexity, route_model
 
@@ -62,12 +65,20 @@ def generate_sql_node(state: AgentState) -> dict:
             history=history[:-1],
         )
     else:
-        messages = build_sql_generation_prompt(
+        # v0.5.0: use PromptContext so the prompt builder sees dynamic
+        # few-shot (self-evolution) and conversation context (multi-turn)
+        # without extra kwargs. Phase 4b and Phase 5 populate these fields
+        # from their respective retrieval nodes; until then they stay empty.
+        ctx = PromptContext(
             user_query=state["user_query"],
             retrieved_schemas=schemas_text,
             intent=intent,
             dialect=dialect,
+            dynamic_examples=state.get("dynamic_examples") or {},
+            conversation_history=state.get("conversation_history") or [],
+            context_summary=state.get("context_summary"),
         )
+        messages = build_sql_generation_prompt_from_context(ctx)
 
     try:
         result = chat_complete(model, messages, temperature=0.0)

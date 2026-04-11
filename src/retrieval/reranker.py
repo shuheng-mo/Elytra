@@ -1,13 +1,21 @@
-"""Phase 1 reranker: ask the cheap LLM to score candidates and resort.
+"""Reranker interface + two implementations.
 
-Phase 2 will replace this with a local cross-encoder (`bge-reranker-v2-m3`).
-The interface (``rerank(query, candidates) -> list[RetrievalResult]``) is
-designed so that swap can be a drop-in.
+Historical note:
+    v0.1–0.4 shipped only the LLM reranker (``LLMReranker``). v0.5.0 adds a
+    local cross-encoder (``LocalReranker``) and a factory (``make_reranker``)
+    so deployments can pick auto / local / llm via ``settings.reranker_provider``.
+    The ``rerank(query, candidates, top_k) -> list[RetrievalResult]`` signature
+    is stable across both implementations so the schema retrieval node
+    doesn't care which backend it got.
 
 Behavior:
     - On any failure (no API key, network error, malformed JSON), we fall back
       to returning the original candidates trimmed to ``top_k``. This keeps the
       pipeline alive even when the LLM is down.
+
+v0.5.0 bug fix: ``LLMReranker.client`` now delegates to
+``src.agent.llm._resolve_client`` so OpenRouter-only deployments no longer
+fall through to a hardcoded OpenAI/DeepSeek client that would fail.
 """
 
 from __future__ import annotations
@@ -15,14 +23,22 @@ from __future__ import annotations
 import json
 import logging
 import re
-
-from openai import OpenAI
+from typing import Any, Protocol
 
 from src.agent.prompts.reranking import RERANK_PROMPT
 from src.config import settings
 from src.retrieval.hybrid_retriever import RetrievalResult
 
 logger = logging.getLogger(__name__)
+
+
+class RerankerLike(Protocol):
+    def rerank(
+        self,
+        query: str,
+        candidates: list[RetrievalResult],
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]: ...
 
 
 def _build_candidate_block(candidates: list[RetrievalResult]) -> str:
@@ -55,27 +71,28 @@ def _extract_json(text: str) -> dict:
 
 
 class LLMReranker:
-    """LLM-as-Reranker using an OpenAI-compatible chat completion endpoint."""
+    """LLM-as-Reranker using an OpenAI-compatible chat completion endpoint.
+
+    Client resolution delegates to ``src.agent.llm._resolve_client`` so the
+    OpenRouter-first routing rules apply. This fixes a v0.4 bug where the
+    reranker bypassed OpenRouter and only worked when OPENAI_API_KEY or
+    DEEPSEEK_API_KEY was set directly.
+    """
 
     def __init__(self, model: str | None = None):
         self.model = model or settings.default_cheap_model
-        self._client: OpenAI | None = None
+        self._client: Any = None
+        self._effective_model: str | None = None
 
-    @property
-    def client(self) -> OpenAI:
+    def _ensure_client(self) -> tuple[Any, str]:
         if self._client is None:
-            if "deepseek" in self.model.lower():
-                if not settings.deepseek_api_key:
-                    raise RuntimeError("DEEPSEEK_API_KEY is not configured.")
-                self._client = OpenAI(
-                    api_key=settings.deepseek_api_key,
-                    base_url="https://api.deepseek.com",
-                )
-            else:
-                if not settings.openai_api_key:
-                    raise RuntimeError("OPENAI_API_KEY is not configured.")
-                self._client = OpenAI(api_key=settings.openai_api_key)
-        return self._client
+            # Local import avoids an import cycle: src.agent.llm imports
+            # retrieval utilities that live one level up.
+            from src.agent.llm import _resolve_client
+
+            self._client, self._effective_model = _resolve_client(self.model)
+        assert self._effective_model is not None
+        return self._client, self._effective_model
 
     def rerank(
         self,
@@ -93,8 +110,11 @@ class LLMReranker:
         )
 
         try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
+            client, effective_model = self._ensure_client()
+            # The ``chat.completions.create`` path works for both OpenAI-like
+            # clients and the Anthropic adapter defined in src.agent.llm.
+            resp = client.chat.completions.create(
+                model=effective_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
             )
@@ -120,3 +140,53 @@ class LLMReranker:
             reverse=True,
         )
         return reranked[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Factory — picks between LocalReranker (cross-encoder) and LLMReranker
+# ---------------------------------------------------------------------------
+
+
+def make_reranker(provider: str | None = None) -> RerankerLike:
+    """Construct a reranker per ``settings.reranker_provider``.
+
+    ``auto`` (default) tries ``LocalReranker`` first and falls back to
+    ``LLMReranker`` if sentence-transformers isn't installed or the model
+    can't load. ``local`` and ``llm`` force one of the two.
+    """
+    choice = (provider or getattr(settings, "reranker_provider", "auto") or "auto").lower()
+
+    if choice == "llm":
+        return LLMReranker()
+
+    if choice in ("local", "auto"):
+        try:
+            from src.retrieval.local_reranker import LocalReranker
+
+            reranker = LocalReranker()
+            # Touch .encoder to force the lazy import+load; catch failures
+            # here so "auto" can fall back to LLM instead of crashing at
+            # first use.
+            if choice == "local":
+                return reranker
+            # Auto mode: probe sentence_transformers existence cheaply without
+            # downloading the full model. If the package isn't installed the
+            # import error surfaces immediately; model load cost is paid on
+            # first rerank call.
+            try:
+                import sentence_transformers  # noqa: F401
+            except ImportError:
+                logger.info(
+                    "sentence-transformers not available; falling back to LLMReranker"
+                )
+                return LLMReranker()
+            return reranker
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "LocalReranker unavailable (%s); falling back to LLMReranker", exc
+            )
+            return LLMReranker()
+
+    raise ValueError(
+        f"unknown reranker provider: {choice!r} (expected auto/local/llm)"
+    )

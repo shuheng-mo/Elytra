@@ -22,6 +22,7 @@ from src.connectors.registry import ConnectorRegistry
 from src.db.connection import get_cursor
 from src.models.request import QueryRequest
 from src.models.response import QueryResponse
+from src.observability.errors import ErrorType, classify_error
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,34 @@ def _compute_result_hash(rows: list[dict[str, Any]] | None) -> str | None:
         return None
 
 
-def _persist_history(state: dict[str, Any]) -> None:
-    """Best-effort write to ``query_history``. Swallows any error."""
+def _resolve_error_type(state: dict[str, Any]) -> str | None:
+    """Pick the canonical ErrorType for this query run.
+
+    Prefers (in order): last correction_history entry's error_type, the final
+    execution error (classified on the fly), or None if the query succeeded.
+    """
+    if state.get("execution_success"):
+        return None
+    history = state.get("correction_history") or []
+    if history:
+        last = history[-1]
+        if isinstance(last, dict) and last.get("error_type"):
+            return str(last["error_type"])
+    error = state.get("execution_error")
+    if error:
+        return classify_error(error).value
+    # Sanitizer rejected — flag as prompt_injection
+    if state.get("sanitizer_violations"):
+        return ErrorType.PROMPT_INJECTION.value
+    return None
+
+
+def _persist_history(state: dict[str, Any]) -> int | None:
+    """Best-effort write to ``query_history``. Returns the new row id or None.
+
+    Uses ``INSERT ... RETURNING id`` so callers can surface the id for
+    downstream feedback submission. Failure is logged but never raised.
+    """
     try:
         # Extract retrieved table names as JSON string
         schemas = state.get("retrieved_schemas") or []
@@ -62,6 +89,8 @@ def _persist_history(state: dict[str, Any]) -> None:
             state.get("token_count") or 0,
         )
 
+        error_type = _resolve_error_type(state)
+
         with get_cursor(dict_rows=False) as cur:
             cur.execute(
                 """
@@ -71,11 +100,12 @@ def _persist_history(state: dict[str, Any]) -> None:
                     latency_ms, token_count, estimated_cost,
                     user_id, user_role, source_name,
                     retrieved_tables, correction_history_json,
-                    result_row_count, result_hash
+                    result_row_count, result_hash, error_type
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s
                 )
+                RETURNING id
                 """,
                 (
                     state.get("session_id") or None,
@@ -95,10 +125,14 @@ def _persist_history(state: dict[str, Any]) -> None:
                     correction_json,
                     state.get("row_count"),
                     result_hash,
+                    error_type,
                 ),
             )
+            row = cur.fetchone()
+            return int(row[0]) if row else None
     except Exception as exc:  # noqa: BLE001
         logger.warning("query_history persist failed: %s", exc)
+        return None
 
 
 @router.post("/query", response_model=QueryResponse)
@@ -140,7 +174,9 @@ async def post_query(req: QueryRequest) -> QueryResponse:
         logger.exception("agent run failed")
         raise HTTPException(status_code=500, detail=f"agent failure: {exc}") from exc
 
-    _persist_history(final_state)
+    history_id = _persist_history(final_state)
+    if history_id is not None:
+        final_state["history_id"] = history_id
 
     return QueryResponse(
         success=bool(final_state.get("execution_success", False)),
@@ -160,4 +196,7 @@ async def post_query(req: QueryRequest) -> QueryResponse:
         user_role=final_state.get("user_role") or None,
         tables_filtered=0,
         chart_spec=final_state.get("chart_spec"),
+        history_id=history_id,
+        session_id=final_state.get("session_id") or req.session_id or None,
+        sanitizer_violations=list(final_state.get("sanitizer_violations") or []),
     )

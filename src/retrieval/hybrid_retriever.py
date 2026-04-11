@@ -104,23 +104,56 @@ class HybridRetriever:
             self.bm25.search_by_name(query, top_n=20)
         )
 
-        # 2. Vector retrieval — degrade gracefully if unavailable
+        # 2. Vector retrieval (table + column level) — degrade gracefully
         vector_scores: dict[str, float] = {}
-        try:
-            for name, score in self.embedder.search(
-                query, top_n=20, source_name=self.source_name
-            ):
-                if name in self.table_lookup:
-                    vector_scores[name] = score
-        except Exception as exc:  # noqa: BLE001 — intentional broad fallback
-            logger.warning("Vector retrieval failed (%s); falling back to BM25 only.", exc)
+        column_boost: dict[str, float] = {}
+        column_weight = getattr(settings, "column_retrieval_weight", 0.6)
+        # Prefer the v0.5.0 mixed API; fall back to the legacy table-only
+        # ``search()`` for stub embedders and older providers.
+        if hasattr(self.embedder, "search_mixed"):
+            try:
+                mixed = self.embedder.search_mixed(
+                    query, top_n=20, source_name=self.source_name
+                )
+                for row in mixed.get("tables", []):
+                    name = row["table_name"]
+                    if name in self.table_lookup:
+                        vector_scores[name] = row["score"]
+                # For each parent table, take the MAX of its column hits as the
+                # boost contribution (sum would over-weight wide tables).
+                if column_weight > 0:
+                    for row in mixed.get("columns", []):
+                        parent = row["table_name"]
+                        if parent not in self.table_lookup:
+                            continue
+                        prev = column_boost.get(parent, 0.0)
+                        if row["score"] > prev:
+                            column_boost[parent] = row["score"]
+            except Exception as exc:  # noqa: BLE001 — intentional broad fallback
+                logger.warning(
+                    "Vector retrieval failed (%s); falling back to BM25 only.", exc
+                )
+        else:
+            try:
+                for name, score in self.embedder.search(
+                    query, top_n=20, source_name=self.source_name
+                ):
+                    if name in self.table_lookup:
+                        vector_scores[name] = score
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Vector retrieval failed (%s); falling back to BM25 only.", exc
+                )
 
         # 3. Min-max normalize each retriever independently
         bm25_norm = _min_max_normalize(bm25_scores)
         vector_norm = _min_max_normalize(vector_scores)
+        column_norm = _min_max_normalize(column_boost)
 
-        # 4. Weighted merge
-        candidate_names = set(bm25_norm) | set(vector_norm)
+        # 4. Weighted merge — column-level signal is added on top of the
+        # weighted BM25+vector combination so a strong column match can
+        # surface a table that neither BM25 nor table-level vectors picked up.
+        candidate_names = set(bm25_norm) | set(vector_norm) | set(column_norm)
         merged: list[RetrievalResult] = []
         for name in candidate_names:
             table = self.table_lookup.get(name)
@@ -128,7 +161,12 @@ class HybridRetriever:
                 continue
             b = bm25_norm.get(name, 0.0)
             v = vector_norm.get(name, 0.0)
-            combined = self.bm25_weight * b + self.vector_weight * v
+            c = column_norm.get(name, 0.0)
+            combined = (
+                self.bm25_weight * b
+                + self.vector_weight * v
+                + column_weight * c
+            )
             merged.append(
                 RetrievalResult(
                     table=table,
