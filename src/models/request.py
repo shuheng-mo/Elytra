@@ -33,3 +33,15 @@ class QueryRequest(BaseModel):
 class HistoryQueryParams(BaseModel):
     session_id: Optional[str] = None
     limit: int = Field(20, ge=1, le=200)
+
+
+class CreateDataSourceRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z][a-zA-Z0-9_]*$",
+                      description="连接器唯一名称（字母开头，仅含字母数字下划线）")
+    dialect: str = Field(..., description="连接器方言，如 postgresql / duckdb / starrocks")
+    description: str = Field("", max_length=200)
+    connection: dict = Field(..., description="连接参数，字段取决于 dialect 的 schema")
+    run_bootstrap: bool = Field(
+        True,
+        description="是否在连接成功后立即索引 schema embeddings（否则需要手动跑 bootstrap）",
+    )

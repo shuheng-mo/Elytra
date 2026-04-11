@@ -49,7 +49,23 @@ services:
       - ./eval:/app/eval
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
+  # Default frontend: React SPA served by nginx on :3000.
+  # nginx reverse-proxies /api/ and /ws/ to the backend, so the browser
+  # sees everything as same-origin.
+  frontend-react:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  # Fallback frontend: original Streamlit app, kept for backend integration
+  # testing and visual parity checks. Not started by `docker compose up`.
+  # Bring it up with:  docker compose --profile fallback up
   frontend:
+    profiles: ["fallback"]
     build:
       context: ./frontend
       dockerfile: Dockerfile

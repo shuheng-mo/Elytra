@@ -212,3 +212,5 @@ datasets
 # Eval reports — machine-generated, keep the dir but ignore the contents
 eval/results/*
 !eval/results/.gitkeep
+# User-added datasource connectors (runtime, not for git)
+config/datasources.local.yaml

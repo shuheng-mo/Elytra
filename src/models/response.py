@@ -47,11 +47,40 @@ class DataSourceDescriptor(BaseModel):
     connected: bool = False
     table_count: Optional[int] = None
     is_default: bool = False
+    user_managed: bool = False  # True if added at runtime via API (deletable)
 
 
 class DataSourcesResponse(BaseModel):
     datasources: list[DataSourceDescriptor]
     default: Optional[str] = None
+
+
+class DialectFieldDescriptor(BaseModel):
+    key: str
+    label: str
+    type: str  # string | password | int | path | select
+    required: bool = False
+    default: Optional[object] = None
+    placeholder: Optional[str] = None
+    help: Optional[str] = None
+
+
+class DialectSchema(BaseModel):
+    dialect: str
+    label: str
+    description: str = ""
+    fields: list[DialectFieldDescriptor]
+
+
+class DialectSchemasResponse(BaseModel):
+    dialects: list[DialectSchema]
+
+
+class CreateDataSourceResponse(BaseModel):
+    success: bool
+    datasource: DataSourceDescriptor
+    indexing_status: str = "pending"  # pending | running | success | skipped | failed
+    indexing_error: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

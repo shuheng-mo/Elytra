@@ -54,7 +54,8 @@ async def post_query_async(req: QueryRequest, request: Request) -> TaskSubmitRes
         "user_id": req.user_id or "",
     })
 
-    # Build a run function for the task manager
+    # Fallback path: used only if astream_events fails to surface the final
+    # state. Runs the agent AND persists history.
     async def _run():
         state = await run_agent_async(
             user_query=req.query,
@@ -66,8 +67,15 @@ async def post_query_async(req: QueryRequest, request: Request) -> TaskSubmitRes
         _persist_history(state)
         return state
 
+    # Happy path: astream_events captures state mid-run, so the manager
+    # invokes this persist callback separately.
+    def _persist(state: dict):
+        _persist_history(state)
+
     # Schedule execution in the background with progress streaming
-    asyncio.create_task(task_manager.execute_with_progress(task_id, _run))
+    asyncio.create_task(
+        task_manager.execute_with_progress(task_id, _run, persist_fn=_persist)
+    )
 
     host = request.headers.get("host", "localhost:8000")
     scheme = "wss" if request.url.scheme == "https" else "ws"

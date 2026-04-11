@@ -1,0 +1,172 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------
+   Default: Dark theme, Electric Cyan accent (matches Elytra logo)
+   Logo palette:
+     - #00D4E8 electric cyan   (mesh, antennae, head)
+     - #0B2D6E deep navy       (elytra body, wordmark)
+   ------------------------------------------------------------------ */
+:root {
+  /* Backgrounds — deep navy family, not neutral grey */
+  --bg-primary: #0a1220;
+  --bg-secondary: #111a2e;
+  --bg-tertiary: #1a243a;
+  --bg-code: #0d1830;
+
+  /* Text */
+  --text-primary: #e6edf3;
+  --text-secondary: #8a9bb8;
+  --text-muted: #4a5878;
+
+  /* Brand accent — electric cyan */
+  --accent-primary: #00d4e8;
+  --accent-primary-soft: rgba(0, 212, 232, 0.15);
+  --accent-primary-deep: #0b2d6e;
+  --accent-success: #3fb950;
+  --accent-warning: #f0b429;
+  --accent-error: #ff6b6b;
+
+  /* Borders */
+  --border-color: #1f2d4a;
+  --border-subtle: #151f35;
+
+  /* SQL syntax highlight */
+  --sql-keyword: #00d4e8;
+  --sql-string: #7dd3fc;
+  --sql-number: #a5b4fc;
+  --sql-function: #c4b5fd;
+  --sql-comment: #4a5878;
+
+  /* Typography */
+  --font-body: 'DM Sans', 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Radii and elevation */
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* Light theme — uses deep navy as the brand accent (on white bg) */
+[data-theme='light'] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #eaeef2;
+  --bg-code: #f1f5fb;
+
+  --text-primary: #1f2328;
+  --text-secondary: #556070;
+  --text-muted: #8b949e;
+
+  --accent-primary: #0b2d6e;
+  --accent-primary-soft: rgba(11, 45, 110, 0.12);
+  --accent-primary-deep: #00d4e8;
+  --accent-success: #1a7f37;
+  --accent-warning: #9a6700;
+  --accent-error: #cf222e;
+
+  --border-color: #d0d7de;
+  --border-subtle: #eaeef2;
+
+  --sql-keyword: #0b2d6e;
+  --sql-string: #0a3069;
+  --sql-number: #0550ae;
+  --sql-function: #8250df;
+  --sql-comment: #8b949e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* SQL syntax highlight spans */
+.sql-keyword {
+  color: var(--sql-keyword);
+  font-weight: 600;
+}
+.sql-string {
+  color: var(--sql-string);
+}
+.sql-number {
+  color: var(--sql-number);
+}
+.sql-function {
+  color: var(--sql-function);
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Glow on the brand logo in sidebar */
+.elytra-logo-glow {
+  filter: drop-shadow(0 0 6px rgba(0, 212, 232, 0.35));
+}
+
+/* Radix portal animations */
+@layer utilities {
+  .animate-in {
+    animation: enter 150ms ease-out;
+  }
+  .animate-out {
+    animation: exit 150ms ease-in;
+  }
+  @keyframes enter {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes exit {
+    from {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+}

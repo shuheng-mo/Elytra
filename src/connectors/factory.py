@@ -12,9 +12,71 @@ engine is actually configured. This lets the test suite import
 
 from __future__ import annotations
 
-from typing import Type
+from typing import Any, Type
 
 from src.connectors.base import DataSourceConnector
+
+
+# ---------------------------------------------------------------------------
+# Connection form schemas — drives the dynamic "add datasource" form in the UI.
+# Each field entry: {key, label, type, required, placeholder, default, help}
+# Types: "string" | "password" | "int" | "path" | "select"
+# ---------------------------------------------------------------------------
+
+DIALECT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "postgresql": {
+        "label": "PostgreSQL",
+        "description": "关系型数据库，支持 OLTP + 轻量分析",
+        "fields": [
+            {"key": "host", "label": "Host", "type": "string",
+             "required": True, "default": "localhost",
+             "placeholder": "localhost"},
+            {"key": "port", "label": "Port", "type": "int",
+             "required": True, "default": 5432},
+            {"key": "database", "label": "Database", "type": "string",
+             "required": True, "placeholder": "postgres"},
+            {"key": "user", "label": "User", "type": "string",
+             "required": True, "placeholder": "postgres"},
+            {"key": "password", "label": "Password", "type": "password",
+             "required": False,
+             "help": "留空则假设免密访问"},
+        ],
+    },
+    "duckdb": {
+        "label": "DuckDB",
+        "description": "嵌入式 OLAP 引擎，单文件数据库",
+        "fields": [
+            {"key": "database_path", "label": "Database Path", "type": "path",
+             "required": True, "placeholder": "datasets/mydb.duckdb",
+             "help": "相对 backend 进程工作目录的路径；用 ':memory:' 创建内存数据库"},
+        ],
+    },
+    "starrocks": {
+        "label": "StarRocks",
+        "description": "MPP OLAP 引擎，MySQL 协议兼容",
+        "fields": [
+            {"key": "host", "label": "Host (FE)", "type": "string",
+             "required": True, "default": "localhost"},
+            {"key": "port", "label": "Query Port", "type": "int",
+             "required": True, "default": 9030,
+             "help": "FE 的 query_port，不是 http_port"},
+            {"key": "database", "label": "Database", "type": "string",
+             "required": False, "placeholder": "default_db"},
+            {"key": "user", "label": "User", "type": "string",
+             "required": True, "default": "root"},
+            {"key": "password", "label": "Password", "type": "password",
+             "required": False},
+        ],
+    },
+}
+
+
+def list_dialect_schemas() -> list[dict[str, Any]]:
+    """Return the ordered list of supported dialects with their form schemas."""
+    return [
+        {"dialect": dialect, **schema}
+        for dialect, schema in DIALECT_SCHEMAS.items()
+    ]
 
 
 def _resolve_class(dialect: str) -> Type[DataSourceConnector]:

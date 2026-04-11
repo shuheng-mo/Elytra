@@ -11,7 +11,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-latest-1c3d5a.svg)](https://github.com/langchain-ai/langgraph)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791.svg)](https://github.com/pgvector/pgvector)
-[![Tests](https://img.shields.io/badge/tests-109%2F109%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-173%2F173%20passing-brightgreen.svg)](#testing)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 [English](README_EN.md) | [简体中文](README.md)
@@ -76,13 +76,15 @@ The reference scenario is an e-commerce SaaS platform: 5 raw operational tables 
 
 ## Architecture
 
-End-to-end call chain: Streamlit frontend → FastAPI → LangGraph agent →
-retrieval / routing / execution subsystems → PostgreSQL + pgvector.
+End-to-end call chain: React SPA (Streamlit fallback) → FastAPI → LangGraph
+agent (10 nodes) → retrieval / routing / execution / chart subsystems →
+PostgreSQL + pgvector.
 
 ```mermaid
 flowchart TB
     subgraph Client["Client"]
-        UI["Streamlit Frontend<br/>frontend/app.py"]
+        UI["React SPA (default)<br/>frontend-react/ · :3000"]
+        UI2["Streamlit (fallback)<br/>frontend/app.py · :8501"]
     end
 
     subgraph API["FastAPI Backend"]
@@ -228,7 +230,8 @@ docker compose -f docker/starrocks/docker-compose.starrocks.yml up -d
 | Database | PostgreSQL 16 + [pgvector](https://github.com/pgvector/pgvector) / DuckDB / StarRocks (optional) |
 | LLM framework | [LangChain](https://github.com/langchain-ai/langchain) + [LangGraph](https://github.com/langchain-ai/langgraph) |
 | Backend | [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) + [Pydantic v2](https://docs.pydantic.dev/latest/) |
-| Frontend | [Streamlit](https://streamlit.io/) ≥ 1.35 |
+| Frontend (default) | [React 18](https://react.dev/) + [Vite](https://vitejs.dev/) + [Tailwind CSS](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/) + [echarts-for-react](https://github.com/hustcc/echarts-for-react) |
+| Frontend (fallback) | [Streamlit](https://streamlit.io/) ≥ 1.35 (docker compose `--profile fallback`) |
 | BM25 | [rank-bm25](https://github.com/dorianbrown/rank_bm25) |
 | Embeddings | OpenAI / OpenRouter / [sentence-transformers](https://www.sbert.net/) |
 | DB drivers | psycopg2-binary / asyncpg / duckdb / aiomysql |
@@ -269,15 +272,22 @@ docker compose exec backend python eval/run_eval.py
 
 Service URLs:
 
-- **Frontend UI**: <http://localhost:8501>
+- **Frontend UI (React, default)**: <http://localhost:3000>
 - **API Swagger**: <http://localhost:8000/docs>
 - **Healthcheck**: <http://localhost:8000/healthz>
+
+> **Streamlit fallback** is reserved for backend cross-checking and chart
+> rendering parity. Run `docker compose --profile fallback up` to bring up
+> both React (`:3000`) and Streamlit (`:8501`) at the same time. The
+> default `docker compose up` only ships React.
 
 ### Option 2: Local development
 
 ```bash
-# 1. Install deps (uv recommended)
-uv sync
+# 1. Install deps (uv recommended). --extra local-embed pulls
+#    sentence-transformers + torch (~700MB on arm64), used by the
+#    default local BGE embedding backend.
+uv sync --extra local-embed
 
 # 2. Run a pgvector database (compose works too)
 docker run -d --name elytra-db \
@@ -296,14 +306,22 @@ cp .env.example .env
 # 5. Start the backend
 .venv/bin/uvicorn src.main:app --reload --port 8000
 
-# 6. Start the frontend in another terminal
+# 6. Start a frontend in another terminal — pick one:
+
+# 6a. React frontend (default)
+cd frontend-react && npm install && npm run dev
+# → http://localhost:5173 (Vite dev server, auto-proxies /api and /ws to 8000)
+
+# 6b. Streamlit fallback (for backend cross-checking)
 .venv/bin/streamlit run frontend/app.py
+# → http://localhost:8501
 ```
 
 ### Try it
 
-Open <http://localhost:8501>, browse the data dictionary in the sidebar, then
-ask one of the example questions:
+Open <http://localhost:5173> (React, local dev) or <http://localhost:3000>
+(React, Docker) or <http://localhost:8501> (Streamlit fallback). Browse the
+schema explorer, then try one of the example questions:
 
 - How many registered users do we have in total?
 - Which product category had the highest sales last month?
@@ -317,20 +335,28 @@ ask one of the example questions:
 
 ```text
 Elytra/
-├── docker-compose.yml             # 3 services: db + backend + frontend
+├── docker-compose.yml             # db + backend + frontend-react (default)
+│                                  # frontend (Streamlit) under --profile fallback
 ├── Dockerfile                     # backend image
-├── frontend/
-│   ├── Dockerfile                 # frontend image
+├── frontend-react/                # React SPA (default frontend)
+│   ├── Dockerfile                 # multi-stage: node build → nginx serve :3000
+│   ├── nginx.conf                 # SPA fallback + /api/ /ws/ reverse proxy
+│   ├── package.json               # Vite + React 18 + Tailwind + shadcn + ECharts
+│   └── src/                       # Layout / Sidebar / pages / hooks / lib
+├── frontend/                      # Streamlit fallback (cross-checking only)
+│   ├── Dockerfile                 # Python slim
 │   └── app.py                     # single-file Streamlit application
 ├── pyproject.toml                 # uv / pip deps + ruff config
 ├── .env.example                   # API key + model + retrieval template
 │
 ├── config/
-│   ├── datasources.yaml           # multi-source registry (PG / DuckDB / StarRocks)
+│   ├── datasources.yaml           # primary multi-source registry
+│   ├── permissions.yaml           # role-based access control (analyst / operator / admin)
 │   └── overlays/                  # per-source schema enrichment YAML
 │
 ├── db/
-│   ├── init.sql                   # PG schema (11 business + 2 system tables)
+│   ├── init.sql                   # PG schema (11 business + 2 system tables, with audit columns)
+│   ├── migrations/                # incremental migrations for existing databases
 │   ├── seed_data.sql              # simulated data
 │   └── data_dictionary.yaml       # bilingual data dictionary (also used as ecommerce_pg overlay)
 │
@@ -346,17 +372,18 @@ Elytra/
 │   ├── main.py                    # FastAPI entrypoint with connector lifespan
 │   │
 │   ├── models/
-│   │   ├── request.py             # QueryRequest (with `source` field)
-│   │   ├── response.py            # QueryResponse / SchemaResponse / DataSourcesResponse / ...
-│   │   └── state.py               # AgentState (with `active_source`)
+│   │   ├── request.py             # QueryRequest (with `source` / `user_id`)
+│   │   ├── response.py            # QueryResponse / ReplayResponse / AuditStatsResponse / ...
+│   │   ├── state.py               # AgentState (with `active_source` / `user_id` / `chart_spec`)
+│   │   └── task.py                # TaskStatus / TaskSubmitResponse / TaskStatusResponse
 │   │
-│   ├── connectors/                # NEW: pluggable data source layer
+│   ├── connectors/                # pluggable data source layer
 │   │   ├── base.py                # DataSourceConnector ABC + dataclasses + safety filter
 │   │   ├── postgres_connector.py  # asyncpg
 │   │   ├── duckdb_connector.py    # embedded DuckDB
 │   │   ├── starrocks_connector.py # aiomysql (StarRocks MySQL protocol)
 │   │   ├── factory.py             # dialect → class with lazy import
-│   │   ├── registry.py            # singleton, init_from_yaml, env-var expansion
+│   │   ├── registry.py            # singleton; primary YAML + user-layer YAML
 │   │   └── overlay.py             # TableMeta + YAML overlay → TableInfo
 │   │
 │   ├── db/
@@ -371,19 +398,33 @@ Elytra/
 │   │   ├── reranker.py            # LLM-as-Reranker
 │   │   └── bootstrap.py           # multi-source bootstrap (--source flag)
 │   │
+│   ├── auth/
+│   │   └── permission.py          # YAML-driven role-based filter
+│   │
+│   ├── tasks/
+│   │   └── manager.py             # in-memory async task manager (Semaphore-bounded)
+│   │
+│   ├── chart/
+│   │   ├── inferrer.py            # rule engine: result shape → chart type
+│   │   └── echarts_builder.py     # ECharts-compatible JSON option builder
+│   │
 │   ├── agent/
-│   │   ├── graph.py               # LangGraph state machine + run_agent_async
+│   │   ├── graph.py               # LangGraph state machine (10 nodes) + run_agent_async
 │   │   ├── llm.py                 # OpenRouter-first chat helper
-│   │   ├── nodes/                 # 6 nodes (sql_executor is async)
+│   │   ├── cost.py                # blended per-1M-token pricing → estimated_cost
+│   │   ├── nodes/                 # 10 nodes (incl. permission_filter + chart_generator)
 │   │   └── prompts/               # intent / sql_generation (with DIALECT_INSTRUCTIONS) / ...
 │   │
 │   ├── router/
 │   │   └── model_router.py        # rule engine: cheap / strong routing
 │   │
 │   └── api/
-│       ├── query.py               # POST /api/query (async, source-aware)
+│       ├── query.py               # POST /api/query (async, source-aware, audit persist)
+│       ├── query_async.py         # POST /api/query/async + GET /api/task/{id}
+│       ├── ws.py                  # WebSocket /ws/task/{id} (real-time progress)
+│       ├── audit.py               # POST /api/replay/{id} + GET /api/audit/stats
 │       ├── schema.py              # GET  /api/schema?source=
-│       ├── datasources.py         # GET  /api/datasources (NEW)
+│       ├── datasources.py         # GET / POST / DELETE /api/datasources + /types
 │       └── history.py             # GET  /api/history
 │
 ├── eval/
@@ -395,7 +436,11 @@ Elytra/
 │   ├── test_connectors.py         # 32 cases — connector layer
 │   ├── test_retrieval.py          # 20 cases
 │   ├── test_agent.py              # 41 cases
-│   └── test_api.py                # 16 cases
+│   ├── test_api.py                # 16 cases
+│   ├── test_audit.py              # 9 cases — audit log + replay
+│   ├── test_permissions.py        # 17 cases — role-based filter
+│   ├── test_tasks.py              # 10 cases — async task manager
+│   └── test_chart.py              # 25 cases — chart inferrer + ECharts builder
 │
 ├── assets/                        # project logo
 └── README.md
@@ -466,20 +511,22 @@ host/port/credentials, so per-environment overrides go in `.env`:
 
 ### `POST /api/query`
 
-Request:
+Sync entry point. Request body:
 
 ```json
 {
   "query": "Which product category had the highest sales last month?",
   "session_id": "optional-session-id",
-  "source": "ecommerce_pg"
+  "source": "ecommerce_pg",
+  "user_id": "demo_analyst"
 }
 ```
 
 `source` is optional and falls back to `default_source` from
-`config/datasources.yaml`. The dialect is automatically derived from the
-connector behind the source — the legacy `dialect` field is still accepted
-but ignored.
+`config/datasources.yaml`. `user_id` is optional and falls back to
+`default_role` from `config/permissions.yaml`. The dialect is automatically
+derived from the connector behind the source — the legacy `dialect` field
+is still accepted but ignored.
 
 Response:
 
@@ -500,9 +547,61 @@ Response:
   "retry_count": 0,
   "latency_ms": 1240,
   "token_count": 856,
-  "error": null
+  "error": null,
+  "user_role": "analyst",
+  "tables_filtered": 0,
+  "chart_spec": { "chart_type": "bar", "...": "..." }
 }
 ```
+
+### `POST /api/query/async`
+
+Same request body as `/api/query`. Submits the agent run as a background
+task and returns immediately:
+
+```json
+{
+  "task_id": "a3f7b2c1",
+  "status": "pending",
+  "ws_url": "ws://localhost:8000/ws/task/a3f7b2c1"
+}
+```
+
+### `GET /api/task/{task_id}`
+
+Polling fallback for async tasks (use the WebSocket when available):
+
+```json
+{
+  "task_id": "a3f7b2c1",
+  "status": "running",
+  "current_step": "generating_sql",
+  "progress_pct": 60
+}
+```
+
+### `WebSocket /ws/task/{task_id}`
+
+After `connect`, the server pushes a JSON event stream:
+`{"type": "progress", "step": "generating_sql", "pct": 60}` after each
+LangGraph node finishes, then `{"type": "complete", "status": "success"}`
+when the run finalizes. The React frontend uses this stream to drive the
+real-time agent timeline.
+
+### `POST /api/replay/{history_id}`
+
+Re-executes a historical query through the full pipeline and compares the
+result hash with the original. Returns `result_match: bool` plus a
+`diff_summary` when hashes differ — useful for verifying that a model
+upgrade still produces identical answers.
+
+### `GET /api/audit/stats?days=7`
+
+Returns aggregate statistics over the last `N` days: total queries, success
+rate, average latency, total cost (USD), and breakdowns by model / intent /
+source / user. The `total_cost_usd` and per-model cost are populated from
+`query_history.estimated_cost`, computed by `src/agent/cost.py` at write
+time.
 
 ### `GET /api/datasources`
 
@@ -517,7 +616,8 @@ Lists every connector registered with `ConnectorRegistry`:
       "description": "E-commerce simulated warehouse (ODS / DWD / DWS)",
       "connected": true,
       "table_count": 13,
-      "is_default": true
+      "is_default": true,
+      "user_managed": false
     },
     {
       "name": "tpch_duckdb",
@@ -525,15 +625,39 @@ Lists every connector registered with `ConnectorRegistry`:
       "description": "TPC-H standard test dataset",
       "connected": true,
       "table_count": 8,
-      "is_default": false
+      "is_default": false,
+      "user_managed": false
     }
   ],
   "default": "ecommerce_pg"
 }
 ```
 
-`connected: false` means the connector failed its startup ping — the rest of
-the registry still comes up so other sources stay queryable.
+`connected: false` means the connector failed its startup ping — the rest
+of the registry still comes up so other sources stay queryable.
+`user_managed: true` marks entries that were added at runtime via
+`POST /api/datasources` and persisted to `config/datasources.local.yaml`.
+
+### `GET /api/datasources/types`
+
+Returns the per-dialect form-field schema (required / optional fields with
+type and description) used by the React Data Connectors page to render its
+dynamic "add data source" form.
+
+### `POST /api/datasources`
+
+Hot-adds a new connector at runtime. The handler validates the request,
+dispatches via `ConnectorFactory`, performs a live ping, registers the
+connector, pre-warms its schema cache, and persists it to
+`config/datasources.local.yaml` (file mode `0600`, gitignored). The
+git-tracked `config/datasources.yaml` is never modified.
+
+### `DELETE /api/datasources/{name}`
+
+Removes a connector from the in-memory registry. User-managed entries are
+also stripped from `datasources.local.yaml`. Primary entries are removed
+runtime-only — the next backend restart re-loads them from
+`config/datasources.yaml`. Returns `204 No Content`.
 
 ### `GET /api/schema?source=<name>`
 
@@ -544,7 +668,10 @@ layer is always hidden.
 
 ### `GET /api/history?session_id=xxx&limit=20`
 
-Past query runs filtered by `session_id`, ordered by `created_at desc`. `limit ∈ [1, 200]`.
+Past query runs filtered by `session_id`, ordered by `created_at desc`.
+`limit ∈ [1, 200]`. Each row carries the audit columns added in v0.3.0:
+`user_id`, `user_role`, `source_name`, `result_row_count`, `result_hash`,
+plus `estimated_cost` (added in v0.4.0).
 
 Full OpenAPI schema at <http://localhost:8000/docs>.
 
@@ -589,12 +716,16 @@ per-case detail.
 .venv/bin/python -m pytest tests/test_agent.py -v
 ```
 
-Currently **109 / 109 passing** in ~1 s. Coverage:
+Currently **173 / 173 passing** in ~1.3 s. Coverage:
 
 - `test_connectors.py` (32 cases) — SQL safety filter migration, `ColumnMeta`/`TableMeta`/`QueryResult` data contracts, `ConnectorFactory` lazy import + dialect routing, `ConnectorRegistry` singleton + `${VAR:-default}` env-var expansion, `enrich_with_overlay` for both YAML structures
 - `test_retrieval.py` (20 cases) — tokenizer, BM25, min-max normalization, `HybridRetriever` score fusion, vector-failure fallback, real data dictionary smoke test
-- `test_agent.py` (41 cases) — SQL safety filter, model routing (every branch), node behavior (with stub-connector injection), full graph end-to-end (success / retry-then-success / retry exhaustion / clarification short-circuit)
+- `test_agent.py` (41 cases) — SQL safety filter, model routing (every branch), 10-node behavior with stub-connector injection, full graph end-to-end (success / retry-then-success / retry exhaustion / clarification short-circuit)
 - `test_api.py` (16 cases) — `/healthz`, `/api/query` (success / failure / explicit source / unknown source / empty / agent crash 500), `/api/datasources`, `/api/schema?source=`, `/api/history`
+- `test_audit.py` (9 cases) — `_compute_result_hash` determinism, `/api/replay/{id}` round-trip, `/api/audit/stats` aggregation
+- `test_permissions.py` (17 cases) — role resolution, table / column filtering, `LIMIT` injection and clamping, glob matching
+- `test_tasks.py` (10 cases) — `TaskManager` lifecycle, semaphore-bounded concurrency, event subscription, async endpoint
+- `test_chart.py` (25 cases) — chart-type inference (six shapes), ECharts spec construction, `chart_generator` node
 
 The tests do not depend on a real database or LLM — every connector is replaced with an in-memory stub injected into the registry, so the whole suite runs in about a second locally.
 
@@ -609,13 +740,28 @@ Delivered (v0.2.0):
 - [x] **Dialect-aware SQL generation** — `DIALECT_INSTRUCTIONS` switches syntax rules per target engine
 - [x] **asyncpg connection pool** — agent hot path is fully async end-to-end
 
+Delivered (v0.3.0):
+
+- [x] **Async task architecture** — `POST /api/query/async` + WebSocket real-time progress + `GET /api/task/{id}` polling fallback
+- [x] **Permissions & multi-tenant isolation** — YAML-driven roles (`analyst` / `operator` / `admin`); table glob filter + column blacklist + row cap
+- [x] **SQL audit log & replay** — `query_history` extended with 9 audit columns; `POST /api/replay/{id}` result-hash diff; `GET /api/audit/stats` dashboard
+- [x] **NL2Chart** — rule-based inference of six chart types (`number_card` / `line` / `bar` / `pie` / `scatter` / `multi_line`) with ECharts JSON output
+
+Delivered (v0.4.0):
+
+- [x] **React SPA default frontend** — Vite + React 18 + Tailwind + shadcn/ui across six pages (Query / Schema Explorer / History / Audit / Data Connectors / Settings); Streamlit retained as a docker compose `--profile fallback` option
+- [x] **Real-time agent timeline** — `astream_events(v2)` streamed over WebSocket; each step is click-expandable to show the agent's reasoning log (Claude-style)
+- [x] **Runtime connector management** — `POST /api/datasources` add-form + `DELETE`; user-managed entries persist to `config/datasources.local.yaml` (gitignored, `0600`); the primary YAML is never touched at runtime
+- [x] **Token cost tracking** — `src/agent/cost.py` blended per-1M-token rates persist into `query_history.estimated_cost`; also fixes a latent bug where async-mode runs were never persisted (`task_manager` now takes a decoupled `persist_fn`)
+- [x] **Multi-format export** — Excel + CSV buttons on Schema / History / Audit pages; Settings ships a session-scoped multi-sheet xlsx bundle export
+
 Next-phase highlights:
 
 - [ ] **Multi-turn dialogue** — `conversation_history` + context summarization + anaphora resolution
 - [ ] **Local cross-encoder reranker** — `bge-reranker-v2-m3` replacing the LLM reranker; column-level retrieval
-- [ ] **SSE streaming** — `POST /api/query/stream`; UI shows the agent's thinking trace
 - [ ] **Tool-use Agent** — upgrade to function-calling mode
-- [ ] **Observability** — structured per-query trace, token cost tracking, error classification, prompt-injection hardening
+- [ ] **Observability** — structured per-query trace, error classification, prompt-injection hardening
+- [ ] **Daily query trend** — add a `time_series` field to `AuditStatsResponse` and wire up the placeholder line chart in the React audit dashboard
 
 ---
 

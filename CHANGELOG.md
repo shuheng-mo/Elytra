@@ -18,7 +18,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-turn dialogue** — `conversation_history` + `context_summary` in `AgentState`, anaphora resolution via LLM rewrite, sliding-window context compression
 - **Local cross-encoder reranker** — replace `LLMReranker` with `bge-reranker-v2-m3`; column-level retrieval; query expansion with multi-route fusion
 - **Tool-use Agent** — upgrade the LangGraph node-based agent into a function-calling agent with `query_database` / `get_table_schema` / `create_visualization` / `clarify_with_user` tools
-- **Observability** — structured per-query trace logs, token/cost tracking, error-class statistics, prompt-injection hardening
+- **Observability** — structured per-query trace logs, error-class statistics, prompt-injection hardening
+- **Daily query trend** — add a `time_series` field to `AuditStatsResponse` and wire up the placeholder line chart in the React audit dashboard
+
+---
+
+## [0.4.0] — React Frontend, Cost Tracking & Runtime Connector Management
+
+A full React SPA replaces Streamlit as the default frontend, with Streamlit
+preserved as a docker compose fallback profile for backend cross-checking.
+Adds runtime connector management, per-query cost estimation, and Excel /
+CSV export across every data page.
+
+### Added
+
+#### React frontend (`frontend-react/`)
+
+- **Vite + React 18 + Tailwind + shadcn/ui** SPA. Six pages: Query, Schema
+  Explorer, History, Audit, Data Connectors, Settings. Routing is plain
+  `useState` (no react-router) per the existing minimalism convention.
+- **Real-time agent timeline** — `useQuery` hook subscribes to
+  `WebSocket /ws/task/{id}`, maps each `progress` event into a step on the
+  timeline. Each step is click-expandable to show the agent's reasoning
+  log lines forwarded from `astream_events(version="v2")` (Claude-style
+  inline reasoning UX).
+- **`echarts-for-react`** consumes the backend `chart_spec` ECharts JSON
+  zero-adapter — a deliberate trade-off vs. the original spec's Recharts
+  plan. Removes the per-shape mapping layer and pixel-aligns with the
+  Streamlit fallback. PostgreSQL `DECIMAL`-as-string values are coerced
+  to numbers in `ChartRenderer.normalizeChartSpec`.
+- **Settings page** — theme (dark / light), accent color preset, user
+  identity switch (analyst / operator / admin → permission filter),
+  default query mode (sync / async), session id reset. State persisted
+  to `localStorage` via a `SettingsProvider` context.
+- **Data Connectors page** — lists every registered connector with
+  dialect-specific official icons (inline simple-icons SVG paths, no npm
+  dep), filter by dialect, "add new" form driven by
+  `GET /api/datasources/types`, and a delete dialog that distinguishes
+  user-managed (permanent) from primary (runtime-only) entries.
+- **Multi-format export** — Schema, History, and Audit pages each have
+  "导出 Excel" + "导出 CSV" buttons via `src/lib/export.js` (SheetJS
+  community edition). Settings has a "session bundle" export that fetches
+  schema + history + audit live from the API and packs them into one
+  multi-sheet xlsx scoped to the current session id. CSV writes a UTF-8
+  BOM so Excel opens Chinese cleanly.
+- Multi-stage Dockerfile (node build → nginx serve `:3000`) with
+  `nginx.conf` reverse-proxying `/api/` and `/ws/` to the backend so the
+  browser always sees same-origin requests.
+
+#### Cost estimation (`src/agent/cost.py`)
+
+- New `MODEL_PRICING_PER_1M` table covering DeepSeek / Anthropic / OpenAI /
+  Gemini / Llama / Qwen, plus a `_DEFAULT_BLENDED_RATE_PER_1M = $2.00`
+  fallback for unknown models.
+- `estimate_cost_usd(model, token_count) -> float` uses a blended rate
+  (rough 3:1 input:output) because `AgentState.token_count` is a single
+  cumulative number, not split by direction.
+- `_persist_history()` in `src/api/query.py` now computes and writes
+  `estimated_cost` for every successful run. The column already existed
+  on `query_history` but was never populated, so
+  `audit_stats.total_cost_usd` used to always return 0.
+- `GET /api/audit/stats` aggregates `SUM(estimated_cost)` and per-model
+  cost.
+
+#### Runtime connector management (`src/api/datasources.py`, `src/connectors/registry.py`)
+
+- `GET /api/datasources/types` — returns the field schema (dialect →
+  required / optional fields with types and descriptions) used by the
+  React form to render a dynamic "add data source" UI.
+- `POST /api/datasources` — validates the request, dispatches via
+  `ConnectorFactory`, performs a live connection ping, registers the
+  connector in the singleton, pre-warms its schema cache, and persists
+  the entry to `config/datasources.local.yaml` (user layer, gitignored,
+  written `0600`). Loaded on startup if present and merged into the
+  registry alongside the primary `config/datasources.yaml` entries.
+- `DELETE /api/datasources/{name}` — disconnects and removes the
+  connector from the in-memory registry. User-managed entries are also
+  stripped from `datasources.local.yaml`. Primary entries are removed
+  runtime-only — the next backend restart re-loads them from
+  `config/datasources.yaml`.
+- `ConnectorRegistry` tracks `_user_managed: set[str]` to distinguish
+  the two layers; `_persist_user_layer()` writes the user YAML; the
+  primary file is never touched at runtime.
+
+### Changed
+
+#### Async task manager — persistence gap fix
+
+- `src/tasks/manager.py::execute_with_progress` previously consumed
+  `astream_events` to feed WebSocket progress; on the happy path the
+  outer `run_fn()` body (which contained `_persist_history`) was
+  skipped, so async-mode queries **never** wrote to `query_history`.
+  Audit stats and history pages quietly missed every async query.
+- Added a `persist_fn` callback parameter. When the astream loop
+  successfully captures the final state, `persist_fn(state)` is called
+  separately so persistence and progress streaming stay decoupled.
+- `src/api/query_async.py` passes `persist_fn=_persist`, where
+  `_persist` calls the same `_persist_history()` used by the sync
+  endpoint. Sync and async writes are now identical.
+
+#### Docker Compose
+
+- New `frontend-react` service (port 3000), `depends_on: backend`,
+  multi-stage build → nginx.
+- Existing `frontend` (Streamlit) service moved under
+  `profiles: ["fallback"]`. Default `docker compose up` only brings up
+  `db + backend + frontend-react`. Use
+  `docker compose --profile fallback up` to additionally expose
+  Streamlit on `:8501` for cross-checking.
+
+### Verification
+
+| Test suite | Cases | Result |
+|---|---:|:---:|
+| `tests/test_*.py` (full backend suite) | 173 | ✅ PASS |
+
+E2E verified on a live PG + LLM + React stack:
+
+- Sync and async queries both render the real-time agent timeline; each
+  step is click-expandable to show the underlying astream events.
+- Schema / History / Audit Excel + CSV exports open correctly with
+  Chinese characters in Excel and Numbers.
+- Settings session bundle xlsx contains: Bundle Info, Schema Summary,
+  Schema layer sheets, History (session-scoped), Audit Summary, and
+  per-dimension Audit sheets.
+- `POST → DELETE → POST` cycle works for both user-managed and primary
+  connectors; primary deletes are runtime-only and restored on backend
+  restart, user-managed deletes flush `datasources.local.yaml`.
+- After running mixed queries through both endpoints,
+  `GET /api/audit/stats?days=7` returns non-zero `total_cost_usd` and a
+  per-model cost breakdown that matches `query_history.estimated_cost`.
 
 ---
 

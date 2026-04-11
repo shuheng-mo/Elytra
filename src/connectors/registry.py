@@ -52,6 +52,14 @@ def _expand_env(value: Any) -> Any:
     return value
 
 
+USER_LAYER_FILENAME = "datasources.local.yaml"
+
+
+def _user_layer_path(primary_path: Path) -> Path:
+    """User-managed YAML lives next to the main datasources.yaml."""
+    return primary_path.parent / USER_LAYER_FILENAME
+
+
 class ConnectorRegistry:
     """Singleton registry of all configured data source connectors."""
 
@@ -62,6 +70,10 @@ class ConnectorRegistry:
         self._raw_configs: list[dict] = []
         self._default_source: str | None = None
         self._initialized: bool = False
+        # Names of connectors that originated from the user layer (local YAML,
+        # added via API). Only these can be deleted at runtime.
+        self._user_managed: set[str] = set()
+        self._primary_yaml_path: Path | None = None
 
     # ----- singleton plumbing ------------------------------------------------
 
@@ -79,7 +91,12 @@ class ConnectorRegistry:
     # ----- lifecycle ---------------------------------------------------------
 
     async def init_from_yaml(self, path: Path | str) -> None:
-        """Parse the datasources YAML and connect every entry. Idempotent."""
+        """Parse the datasources YAML and connect every entry. Idempotent.
+
+        Also merges a gitignored user layer ``datasources.local.yaml`` sitting
+        next to the primary file, so connectors added at runtime via the API
+        survive a backend restart.
+        """
         if self._initialized:
             return
 
@@ -87,11 +104,38 @@ class ConnectorRegistry:
         if not path.exists():
             raise FileNotFoundError(f"datasources config not found: {path}")
 
+        self._primary_yaml_path = path
+
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         raw = _expand_env(raw)
 
         self._default_source = raw.get("default_source")
-        self._raw_configs = list(raw.get("datasources") or [])
+        primary_cfgs = list(raw.get("datasources") or [])
+
+        # Merge user layer (runtime-added connectors). Names collide with
+        # primary entries? Primary wins and user layer is logged as ignored.
+        user_cfgs: list[dict] = []
+        user_layer = _user_layer_path(path)
+        if user_layer.exists():
+            try:
+                user_raw = yaml.safe_load(user_layer.read_text(encoding="utf-8")) or {}
+                user_raw = _expand_env(user_raw)
+                for entry in user_raw.get("datasources") or []:
+                    name = entry.get("name")
+                    if not name:
+                        continue
+                    if any(e.get("name") == name for e in primary_cfgs):
+                        logger.warning(
+                            "user-layer datasource %r shadowed by primary YAML; skipped",
+                            name,
+                        )
+                        continue
+                    user_cfgs.append(entry)
+                    self._user_managed.add(name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to load user layer %s: %s", user_layer, exc)
+
+        self._raw_configs = primary_cfgs + user_cfgs
 
         for ds_cfg in self._raw_configs:
             name = ds_cfg.get("name")
@@ -171,3 +215,119 @@ class ConnectorRegistry:
     def raw_configs(self) -> list[dict]:
         """Return the raw YAML configs (env-expanded), in declaration order."""
         return list(self._raw_configs)
+
+    def is_user_managed(self, name: str) -> bool:
+        """True if this connector was added via the runtime API (user layer)."""
+        return name in self._user_managed
+
+    # ----- runtime mutation (user-added connectors) --------------------------
+
+    async def add_connector(self, config: dict) -> DataSourceConnector:
+        """Instantiate + connect + register a new connector at runtime.
+
+        Persists the entry to the gitignored user-layer YAML so it survives
+        a backend restart. Raises ``ValueError`` on validation failure,
+        ``RuntimeError`` on connect/probe failure.
+        """
+        name = config.get("name")
+        if not name:
+            raise ValueError("datasource config missing 'name'")
+        if name in self._connectors:
+            raise ValueError(f"datasource {name!r} already exists")
+
+        # Instantiate + connect + ping. If ping fails, tear down so we don't
+        # leave a stale connector in the registry.
+        connector = ConnectorFactory.create(config)
+        try:
+            await connector.connect()
+            ok = await connector.test_connection()
+            if not ok:
+                raise RuntimeError("test_connection returned False")
+        except Exception as exc:
+            try:
+                await connector.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(f"failed to connect {name}: {exc}") from exc
+
+        # Commit to in-memory registry first.
+        self._connectors[name] = connector
+        self._raw_configs.append(config)
+        self._user_managed.add(name)
+
+        # Persist to the user layer YAML (best effort; roll back on failure).
+        try:
+            self._persist_user_layer()
+        except Exception as exc:  # noqa: BLE001
+            # Roll back in-memory state.
+            self._connectors.pop(name, None)
+            self._raw_configs = [c for c in self._raw_configs if c.get("name") != name]
+            self._user_managed.discard(name)
+            try:
+                await connector.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(f"persist user layer failed: {exc}") from exc
+
+        logger.info("added datasource %s [%s] at runtime", name, connector.dialect)
+        return connector
+
+    async def remove_connector(self, name: str) -> None:
+        """Remove a connector from the registry.
+
+        User-managed entries (from ``datasources.local.yaml``) are permanently
+        deleted — both in-memory and on disk. Primary entries (from the
+        git-tracked ``datasources.yaml``) are removed from the in-memory
+        registry only; they reappear on the next backend restart unless the
+        user edits the YAML manually. We refuse to rewrite the git-tracked
+        file from the API because that would silently clobber source control.
+        """
+        if name not in self._connectors:
+            raise KeyError(f"unknown datasource: {name!r}")
+
+        is_user_managed = name in self._user_managed
+
+        connector = self._connectors.pop(name)
+        self._raw_configs = [c for c in self._raw_configs if c.get("name") != name]
+        self._user_managed.discard(name)
+        if self._default_source == name:
+            self._default_source = None
+
+        try:
+            await connector.disconnect()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("disconnect %s failed: %s", name, exc)
+
+        if is_user_managed:
+            self._persist_user_layer()
+            logger.info("removed user-managed datasource %s (persisted)", name)
+        else:
+            logger.warning(
+                "removed primary-layer datasource %s (runtime only; will reappear "
+                "on backend restart unless config/datasources.yaml is edited)",
+                name,
+            )
+
+    def _persist_user_layer(self) -> None:
+        """Write user-managed configs to datasources.local.yaml."""
+        if self._primary_yaml_path is None:
+            raise RuntimeError("registry not initialized from a YAML path")
+
+        user_layer_path = _user_layer_path(self._primary_yaml_path)
+        user_cfgs = [
+            c for c in self._raw_configs if c.get("name") in self._user_managed
+        ]
+        doc = {
+            "_header": (
+                "User-added connectors (gitignored). Edit via the UI or the "
+                "/api/datasources API — manual edits may be overwritten."
+            ),
+            "datasources": user_cfgs,
+        }
+        yaml_text = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+        user_layer_path.write_text(yaml_text, encoding="utf-8")
+        # 0600 so secrets (passwords, keys) aren't world-readable
+        try:
+            os.chmod(user_layer_path, 0o600)
+        except Exception:  # noqa: BLE001
+            pass

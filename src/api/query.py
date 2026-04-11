@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from src.agent.cost import estimate_cost_usd
 from src.agent.graph import run_agent_async
 from src.connectors.registry import ConnectorRegistry
 from src.db.connection import get_cursor
@@ -56,18 +57,23 @@ def _persist_history(state: dict[str, Any]) -> None:
 
         result_hash = _compute_result_hash(state.get("execution_result"))
 
+        estimated_cost = estimate_cost_usd(
+            state.get("model_used"),
+            state.get("token_count") or 0,
+        )
+
         with get_cursor(dict_rows=False) as cur:
             cur.execute(
                 """
                 INSERT INTO query_history (
                     session_id, user_query, intent, generated_sql,
                     execution_success, retry_count, model_used,
-                    latency_ms, token_count,
+                    latency_ms, token_count, estimated_cost,
                     user_id, user_role, source_name,
                     retrieved_tables, correction_history_json,
                     result_row_count, result_hash
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
@@ -81,6 +87,7 @@ def _persist_history(state: dict[str, Any]) -> None:
                     state.get("model_used"),
                     state.get("latency_ms", 0),
                     state.get("token_count", 0),
+                    estimated_cost,
                     state.get("user_id") or None,
                     state.get("user_role") or None,
                     state.get("active_source") or None,
