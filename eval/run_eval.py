@@ -63,6 +63,7 @@ class TestCase:
     id: int
     category: str
     query: str
+    source: str = ""  # data source name; empty = use backend default
     expected_tables: list[str] = field(default_factory=list)
     expected_sql_contains: list[str] = field(default_factory=list)
     expected_result_check: dict[str, Any] = field(default_factory=dict)
@@ -87,6 +88,8 @@ class CaseResult:
     sql_contains_hit: bool
     result_check_pass: bool
     result_check_reason: str
+    # per-node timing breakdown (populated since v0.6.0)
+    node_timings: dict[str, float] = field(default_factory=dict)
     # raw response for debugging (may be large)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -106,6 +109,7 @@ def load_cases(path: Path) -> list[TestCase]:
                 id=int(entry["id"]),
                 category=str(entry.get("category", "")),
                 query=str(entry["query"]),
+                source=str(entry.get("source", "")),
                 expected_tables=list(entry.get("expected_tables", []) or []),
                 expected_sql_contains=list(entry.get("expected_sql_contains", []) or []),
                 expected_result_check=dict(entry.get("expected_result_check", {}) or {}),
@@ -119,11 +123,12 @@ def call_api(
     api_url: str,
     query: str,
     session_id: str,
+    source: str = "",
 ) -> dict[str, Any]:
-    resp = client.post(
-        f"{api_url}/api/query",
-        json={"query": query, "session_id": session_id, "dialect": "postgresql"},
-    )
+    body: dict[str, Any] = {"query": query, "session_id": session_id}
+    if source:
+        body["source"] = source
+    resp = client.post(f"{api_url}/api/query", json=body)
     resp.raise_for_status()
     return resp.json()
 
@@ -236,7 +241,7 @@ def run_one(
     session_id: str,
 ) -> CaseResult:
     try:
-        resp = call_api(client, api_url, case.query, session_id)
+        resp = call_api(client, api_url, case.query, session_id, source=case.source)
     except httpx.HTTPError as exc:
         return CaseResult(
             case_id=case.id,
@@ -284,6 +289,7 @@ def run_one(
         sql_contains_hit=contains_hit,
         result_check_pass=result_pass,
         result_check_reason=reason,
+        node_timings=resp.get("node_timings") or {},
         raw=resp,
     )
 

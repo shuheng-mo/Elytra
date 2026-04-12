@@ -147,14 +147,20 @@ class LLMReranker:
 # ---------------------------------------------------------------------------
 
 
-def make_reranker(provider: str | None = None) -> RerankerLike:
+def make_reranker(provider: str | None = None) -> RerankerLike | None:
     """Construct a reranker per ``settings.reranker_provider``.
 
-    ``auto`` (default) tries ``LocalReranker`` first and falls back to
-    ``LLMReranker`` if sentence-transformers isn't installed or the model
-    can't load. ``local`` and ``llm`` force one of the two.
+    ``none`` (default) disables reranking entirely — the hybrid retriever's
+    BM25+vector score fusion is used directly. This saves ~12s per query
+    by avoiding an LLM round-trip.
+
+    ``auto`` tries ``LocalReranker`` first and falls back to ``LLMReranker``.
+    ``local`` and ``llm`` force one of the two.
     """
-    choice = (provider or getattr(settings, "reranker_provider", "auto") or "auto").lower()
+    choice = (provider or getattr(settings, "reranker_provider", "none") or "none").lower()
+
+    if choice == "none":
+        return None
 
     if choice == "llm":
         return LLMReranker()
@@ -188,5 +194,5 @@ def make_reranker(provider: str | None = None) -> RerankerLike:
             return LLMReranker()
 
     raise ValueError(
-        f"unknown reranker provider: {choice!r} (expected auto/local/llm)"
+        f"unknown reranker provider: {choice!r} (expected none/auto/local/llm)"
     )

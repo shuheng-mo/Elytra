@@ -33,9 +33,11 @@ the prompt-switching logic in exactly one place.
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import logging
 import time
-from typing import Literal
+from typing import Callable, Literal
 
 from langgraph.graph import END, START, StateGraph
 
@@ -63,6 +65,52 @@ from src.models.state import AgentState, make_initial_state
 from src.observability.sanitizer import SanitizerAction, sanitize_user_query
 
 logger_graph = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-node timing wrapper
+# ---------------------------------------------------------------------------
+
+
+def _timed(name: str, fn: Callable) -> Callable:
+    """Wrap a sync or async node function with perf_counter instrumentation."""
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def async_wrapper(state: AgentState) -> dict:
+            t0 = time.perf_counter()
+            result = await fn(state)
+            elapsed = (time.perf_counter() - t0) * 1000
+            timings = dict(state.get("node_timings") or {})
+            # Append suffix for retried nodes (e.g. generate_sql_2)
+            key = name
+            if key in timings:
+                i = 2
+                while f"{name}_{i}" in timings:
+                    i += 1
+                key = f"{name}_{i}"
+            timings[key] = round(elapsed, 1)
+            result["node_timings"] = timings
+            logger_graph.info("[timing] %s = %.0f ms", key, elapsed)
+            return result
+        return async_wrapper
+
+    @functools.wraps(fn)
+    def sync_wrapper(state: AgentState) -> dict:
+        t0 = time.perf_counter()
+        result = fn(state)
+        elapsed = (time.perf_counter() - t0) * 1000
+        timings = dict(state.get("node_timings") or {})
+        key = name
+        if key in timings:
+            i = 2
+            while f"{name}_{i}" in timings:
+                i += 1
+            key = f"{name}_{i}"
+        timings[key] = round(elapsed, 1)
+        result["node_timings"] = timings
+        logger_graph.info("[timing] %s = %.0f ms", key, elapsed)
+        return result
+    return sync_wrapper
 
 
 # ----- Conditional edge functions ------------------------------------------
@@ -126,20 +174,20 @@ def build_agent_graph():
     """Construct and compile the LangGraph state machine."""
     graph = StateGraph(AgentState)
 
-    graph.add_node("classify_intent", classify_intent_node)
-    graph.add_node("resolve_context", resolve_context_node)
-    graph.add_node("retrieve_schema", retrieve_schema_node)
-    graph.add_node("filter_by_permission", filter_by_permission_node)
-    graph.add_node("retrieve_experience", retrieve_experience_node)
-    graph.add_node("generate_sql", generate_sql_node)
-    graph.add_node("execute_sql", execute_sql_node)
-    graph.add_node("self_correction", self_correction_node)
-    graph.add_node("format_result", format_result_node)
-    graph.add_node("save_experience", save_experience_node)
-    graph.add_node("generate_chart", generate_chart_node)
-    graph.add_node("summarize_conversation", summarize_conversation_node)
-    graph.add_node("format_error", format_error_node)
-    graph.add_node("format_clarification", format_clarification_node)
+    graph.add_node("classify_intent", _timed("classify_intent", classify_intent_node))
+    graph.add_node("resolve_context", _timed("resolve_context", resolve_context_node))
+    graph.add_node("retrieve_schema", _timed("retrieve_schema", retrieve_schema_node))
+    graph.add_node("filter_by_permission", _timed("filter_by_permission", filter_by_permission_node))
+    graph.add_node("retrieve_experience", _timed("retrieve_experience", retrieve_experience_node))
+    graph.add_node("generate_sql", _timed("generate_sql", generate_sql_node))
+    graph.add_node("execute_sql", _timed("execute_sql", execute_sql_node))
+    graph.add_node("self_correction", _timed("self_correction", self_correction_node))
+    graph.add_node("format_result", _timed("format_result", format_result_node))
+    graph.add_node("save_experience", _timed("save_experience", save_experience_node))
+    graph.add_node("generate_chart", _timed("generate_chart", generate_chart_node))
+    graph.add_node("summarize_conversation", _timed("summarize_conversation", summarize_conversation_node))
+    graph.add_node("format_error", _timed("format_error", format_error_node))
+    graph.add_node("format_clarification", _timed("format_clarification", format_clarification_node))
 
     graph.add_edge(START, "classify_intent")
 

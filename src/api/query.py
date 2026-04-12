@@ -199,4 +199,5 @@ async def post_query(req: QueryRequest) -> QueryResponse:
         history_id=history_id,
         session_id=final_state.get("session_id") or req.session_id or None,
         sanitizer_violations=list(final_state.get("sanitizer_violations") or []),
+        node_timings=final_state.get("node_timings") or None,
     )

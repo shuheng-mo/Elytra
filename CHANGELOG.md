@@ -15,11 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 
-- **Multi-turn dialogue** — `conversation_history` + `context_summary` in `AgentState`, anaphora resolution via LLM rewrite, sliding-window context compression
-- **Local cross-encoder reranker** — replace `LLMReranker` with `bge-reranker-v2-m3`; column-level retrieval; query expansion with multi-route fusion
 - **Tool-use Agent** — upgrade the LangGraph node-based agent into a function-calling agent with `query_database` / `get_table_schema` / `create_visualization` / `clarify_with_user` tools
-- **Observability** — structured per-query trace logs, error-class statistics, prompt-injection hardening
-- **Daily query trend** — add a `time_series` field to `AuditStatsResponse` and wire up the placeholder line chart in the React audit dashboard
+
+---
+
+## [0.6.0] — Performance Optimization, Admin Config & Feedback Fix
+
+End-to-end query latency reduced from **~57s to ~10s** (5.7x) through a
+systematic three-phase optimization. Admin users can now hot-reload backend
+configuration without restarting the server.
+
+### Performance (Phase 1–3)
+
+- **Singleton Embedder** — all consumers (`HybridRetriever`, `retrieve_experience`, `save_experience`, `feedback`) share a single `get_embedder()` instance; eliminates duplicate BGE model loading on cold start (−25s)
+- **`local_files_only=True`** — `SentenceTransformer` skips HuggingFace remote validation when model is cached on disk (−15s cold start)
+- **Startup pre-warm** — `lifespan` event pre-loads the Embedder and runs a warmup embed, so the first user query doesn't pay MPS first-inference cost
+- **Intent-first model routing** — `route_model()` uses intent as the primary signal instead of `n_tables`; fixes a bug where `rerank_top_k=5` caused all queries to route to the strong model
+- **Heuristic intent classifier** — replaces the LLM-based classifier with a keyword+regex engine (−10s per query); LLM classifier retained as opt-in via `INTENT_CLASSIFIER=llm`
+- **Reranker default `none`** — BM25+vector score fusion is used directly, skipping the LLM rerank round-trip (−12s per query); `RERANKER_PROVIDER=llm` still available
+- **OpenRouter client caching** — module-level client singleton reuses TCP/TLS connections across LLM calls
+- **Per-node timing instrumentation** — every LangGraph node reports `elapsed_ms` via `node_timings` in `AgentState` and the API response
+- **Query embedding cache** — `retrieve_schema` computes the embedding once and stores it in state; `retrieve_experience` and `save_experience` reuse it
+- **Intent-aware dynamic top-K** — `simple_query` retrieves 3 tables, `aggregation` 5, `multi_join`/`exploration` 8; reduces prompt token count
+
+### Admin Runtime Config
+
+- **`GET /PUT /api/config`** — admin-only endpoint to read and update configurable environment variables at runtime; writes to `.env` and hot-reloads the `settings` singleton without restart
+- **SettingsPage "运行时环境配置" card** — visible only when role is admin; editable fields for model names, retrieval weights, retry count, timeouts; "保存并热加载" button with change indicators
+- **`CONFIGURABLE_VARS` whitelist** — API keys and `DATABASE_URL` are excluded from the admin UI for security
+
+### Bug Fixes
+
+- **Feedback buttons not showing** — async mode (`/api/query/async`) discarded `history_id` from `_persist_history()` return value; `agentStateToResponse()` in the frontend was missing `history_id`/`session_id` field mapping
+- **PermissionBadge hardcoded to "analyst"** — `QueryPage` now reads the fallback role from `useSettings().currentIdentity.role` instead of a hardcoded string
+
+### Eval & Tests
+
+- **207 / 207 unit tests passing** (up from 173)
+- **Eval test set expanded to 17 cases** — added TPC-H (DuckDB) and ClickHouse cross-source cases; `source` field in `test_queries.yaml`; `node_timings` captured in eval reports
 
 ---
 

@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.audit import router as audit_router
 from src.api.conversation import router as conversation_router
+from src.api.env_config import router as env_config_router
 from src.api.datasources import router as datasources_router
 from src.api.evolution import router as evolution_router
 from src.api.feedback import router as feedback_router
@@ -34,6 +35,7 @@ from src.api.ws import router as ws_router
 from src.tasks.manager import TaskManager
 from src.config import settings
 from src.connectors.registry import ConnectorRegistry
+from src.retrieval.embedder import get_embedder
 from src.retrieval.schema_loader import SchemaLoader
 
 logging.basicConfig(
@@ -80,6 +82,15 @@ async def lifespan(_app: FastAPI):
         except Exception as exc:  # noqa: BLE001
             logger.warning("schema preload failed for %s: %s", name, exc)
 
+    # Pre-warm the Embedder singleton: load model weights + MPS first-inference
+    # so the first user query doesn't pay the cold-start penalty.
+    try:
+        embedder = get_embedder()
+        embedder.embed("warmup")
+        logger.info("embedder pre-warmed (%s, dim=%d)", embedder.model, embedder.dim)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("embedder warmup failed: %s", exc)
+
     yield
     try:
         await registry.disconnect_all()
@@ -117,4 +128,5 @@ app.include_router(audit_router)
 app.include_router(feedback_router)
 app.include_router(evolution_router)
 app.include_router(conversation_router)
+app.include_router(env_config_router)
 app.include_router(ws_router)

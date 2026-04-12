@@ -40,18 +40,22 @@ def route_model(
 
     Phase-2 fallback: when the cheap model has already failed twice, force an
     upgrade to the strong model regardless of intent.
+
+    The routing uses **intent as the primary signal**. ``n_tables`` is a
+    secondary tiebreaker because the retriever always returns ``rerank_top_k``
+    candidates (typically 5), making table-count alone unreliable for gauging
+    actual query complexity.
     """
     if retry_count >= 2:
         return settings.default_strong_model
 
-    n_tables = _distinct_tables(retrieved_schemas)
+    # Intent-first routing: simple and aggregation queries use cheap model
+    # regardless of how many tables the retriever returned.
+    if intent in ("simple_query", "aggregation"):
+        return settings.default_cheap_model
 
-    if intent == "simple_query" and n_tables <= 1:
-        return settings.default_cheap_model
-    if intent == "aggregation" and n_tables <= 2:
-        return settings.default_cheap_model
-    if intent == "multi_join" or n_tables >= 3:
+    # Complex intents always use the strong model.
+    if intent in ("multi_join", "exploration"):
         return settings.default_strong_model
-    if intent == "exploration":
-        return settings.default_strong_model
+
     return settings.default_cheap_model

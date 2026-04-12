@@ -6,7 +6,7 @@ see. Failures are logged and swallowed — a retrieval hiccup should never
 break the main agent flow.
 
 State contract:
-    Reads:  ``user_query``, ``active_source``, ``intent``
+    Reads:  ``user_query``, ``active_source``, ``intent``, ``query_embedding``
     Writes: ``dynamic_examples`` = {corrections, golden, negative}
 """
 
@@ -18,14 +18,13 @@ from functools import lru_cache
 from src.evolution.experience_store import ExperienceStore
 from src.evolution.feedback_store import FeedbackStore
 from src.models.state import AgentState
-from src.retrieval.embedder import Embedder
+from src.retrieval.embedder import get_embedder
 
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1)
-def _embedder() -> Embedder:
-    return Embedder()
+def _embedder():
+    return get_embedder()
 
 
 @lru_cache(maxsize=1)
@@ -45,12 +44,14 @@ def retrieve_experience_node(state: AgentState) -> dict:
     if not user_query or not source_name:
         return {"dynamic_examples": {}}
 
-    try:
-        embedder = _embedder()
-        query_embedding = embedder.embed(user_query)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("retrieve_experience: embed failed (%s)", exc)
-        return {"dynamic_examples": {}}
+    # Reuse embedding cached by retrieve_schema_node if available
+    query_embedding = state.get("query_embedding")
+    if query_embedding is None:
+        try:
+            query_embedding = _embedder().embed(user_query)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("retrieve_experience: embed failed (%s)", exc)
+            return {"dynamic_examples": {}}
 
     corrections = _experience_store().retrieve_similar(
         query_embedding=query_embedding,

@@ -8,6 +8,7 @@
 #   id                       - stable test id
 #   category                 - simple_query | aggregation | multi_join | exploration | ranking
 #   query                    - the natural-language question
+#   source                   - (optional) data source name; omit = backend default (ecommerce_pg)
 #   expected_tables          - list of tables we expect the agent to retrieve & query
 #                              (recall metric: hit if ANY of these is referenced in
 #                              the generated SQL)
@@ -156,3 +157,35 @@ test_cases:
     expected_result_check:
       type: single_value
       condition: "value is not None and value > 0"
+
+  # ---------------------- cross-source: TPC-H (DuckDB) ----------------------
+  - id: 15
+    category: simple_query
+    source: tpch_duckdb
+    query: "总共有多少个客户"
+    expected_tables: [customer]
+    expected_sql_contains: ["count", "customer"]
+    expected_result_check:
+      type: single_value
+      condition: "value > 0"
+
+  - id: 16
+    category: aggregation
+    source: tpch_duckdb
+    query: "各国家的客户数量"
+    expected_tables: [customer, nation]
+    expected_sql_contains: ["count", "group by"]
+    expected_result_check:
+      type: row_count
+      condition: "count >= 1"
+
+  # ---------------------- cross-source: ClickHouse ----------------------
+  - id: 17
+    category: aggregation
+    source: ecommerce_clickhouse
+    query: "各品类的总销售额"
+    expected_tables: [dwd_order_detail, dws_daily_sales]
+    expected_sql_contains: ["sum", "group by"]
+    expected_result_check:
+      type: row_count
+      condition: "count >= 1"

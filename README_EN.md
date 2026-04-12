@@ -679,7 +679,7 @@ Full OpenAPI schema at <http://localhost:8000/docs>.
 
 ## Evaluation
 
-The test set lives in [`eval/test_queries.yaml`](eval/test_queries.yaml) (14 cases across 5 categories). Run:
+The test set lives in [`eval/test_queries.yaml`](eval/test_queries.yaml) (17 cases across 5 categories + cross-source validation). Run:
 
 ```bash
 python eval/run_eval.py
@@ -716,18 +716,19 @@ per-case detail.
 .venv/bin/python -m pytest tests/test_agent.py -v
 ```
 
-Currently **173 / 173 passing** in ~1.3 s. Coverage:
+Currently **207 / 207 passing** in ~8 s. Coverage:
 
-- `test_connectors.py` (32 cases) — SQL safety filter migration, `ColumnMeta`/`TableMeta`/`QueryResult` data contracts, `ConnectorFactory` lazy import + dialect routing, `ConnectorRegistry` singleton + `${VAR:-default}` env-var expansion, `enrich_with_overlay` for both YAML structures
+- `test_connectors.py` (32 cases) — SQL safety filter, `ColumnMeta`/`TableMeta`/`QueryResult` data contracts, `ConnectorFactory` lazy import + dialect routing, `ConnectorRegistry` singleton + `${VAR:-default}` env-var expansion, `enrich_with_overlay` for both YAML structures
 - `test_retrieval.py` (20 cases) — tokenizer, BM25, min-max normalization, `HybridRetriever` score fusion, vector-failure fallback, real data dictionary smoke test
-- `test_agent.py` (41 cases) — SQL safety filter, model routing (every branch), 10-node behavior with stub-connector injection, full graph end-to-end (success / retry-then-success / retry exhaustion / clarification short-circuit)
+- `test_agent.py` (43 cases) — SQL safety filter, model routing (all branches incl. intent-first routing), 10-node behavior with stub-connector injection, full graph end-to-end (success / retry-then-success / retry exhaustion / clarification short-circuit), heuristic intent classifier
 - `test_api.py` (16 cases) — `/healthz`, `/api/query` (success / failure / explicit source / unknown source / empty / agent crash 500), `/api/datasources`, `/api/schema?source=`, `/api/history`
-- `test_audit.py` (9 cases) — `_compute_result_hash` determinism, `/api/replay/{id}` round-trip, `/api/audit/stats` aggregation
+- `test_audit.py` (12 cases) — `_compute_result_hash` determinism, `/api/replay/{id}` round-trip, `/api/audit/stats` aggregation
 - `test_permissions.py` (17 cases) — role resolution, table / column filtering, `LIMIT` injection and clamping, glob matching
 - `test_tasks.py` (10 cases) — `TaskManager` lifecycle, semaphore-bounded concurrency, event subscription, async endpoint
 - `test_chart.py` (25 cases) — chart-type inference (six shapes), ECharts spec construction, `chart_generator` node
+- `test_sanitizer.py` (32 cases) — jailbreak detection, role reversal, SQL keyword density, length cap, legitimate query passthrough
 
-The tests do not depend on a real database or LLM — every connector is replaced with an in-memory stub injected into the registry, so the whole suite runs in about a second locally.
+The tests do not depend on a real database or LLM — every connector is replaced with an in-memory stub injected into the registry, so the whole suite runs in about 8 seconds locally.
 
 ---
 
@@ -763,8 +764,22 @@ Delivered (v0.5.0):
 - [x] **Daily query trend** — `AuditStatsResponse.time_series` aggregates totals + successes per day with Python-side zero-fill so the frontend line chart is contiguous; `AuditDashboard` replaces the placeholder with ECharts `line` and gains three self-evolution KPI cards
 - [x] **Agent self-evolution** — `experience_pool` and `query_feedback` pgvector tables with an `embedding` column injected at runtime by `Embedder.bootstrap_experience_tables()` (detects dim mismatch and drops the stale column automatically); `retrieve_experience` / `save_experience` nodes are conditionally activated on the success-after-retry path; `POST /api/feedback` + `GET /api/evolution/stats` + React `FeedbackButtons` close the UI loop; a single `PromptContext` dataclass unifies the injection point for dynamic few-shot examples and conversation context
 
+Delivered (v0.6.0):
+
+- [x] **Performance optimization (5.7x speedup)** — singleton Embedder + `local_files_only` + startup pre-warm eliminate cold-start overhead; heuristic intent classifier replaces LLM call (−10s); LLM rerank disabled by default (−12s); OpenRouter client connection reuse; cross-node query embedding cache; intent-aware dynamic top-K; end-to-end latency reduced from ~57s to ~10s
+- [x] **Per-node timing instrumentation** — every LangGraph node reports `elapsed_ms` via `node_timings` in `AgentState` and the API response
+- [x] **Admin runtime config** — `GET/PUT /api/config` admin-only endpoint for hot-reloading model names, retrieval weights, retry count, timeouts without restart; React Settings page shows an admin-only editor card; API keys are excluded for security
+- [x] **Feedback button fix** — async mode `history_id` now written back to state; frontend `agentStateToResponse` maps `history_id`/`session_id` correctly
+- [x] **PermissionBadge fix** — QueryPage role display reads from `useSettings()` instead of hardcoded `'analyst'`
+
 Next-phase highlights:
 
+- [ ] **NL2Insight proactive analysis** — evolve from passive Q&A to agent-driven multi-step drill-down (trend → anomaly → root cause → recommendation); automatically chain multi-turn results into a structured analysis report
+- [ ] **Lineage-aware SQL generation** — integrate a table-level lineage graph so retrieval can auto-expand related tables along foreign-key paths and pick optimal JOIN strategies, eliminating missed recalls from pure semantic matching
+- [ ] **Federated query (cross-source JOIN)** — the agent decomposes cross-datasource questions into sub-queries dispatched to different engines, with DuckDB as an in-memory intermediate layer for cross-engine result merging
+- [ ] **Private LLM deployment** — first-class support for vLLM / Ollama local inference backends; chat + embedding fully air-gapped for data-sovereignty compliance
+- [ ] **Enterprise IAM integration** — plug `PermissionContext` into LDAP / SSO / Apache Ranger instead of the current static YAML, enabling dynamic role resolution and audit-trail compliance
+- [ ] **Auto schema annotation** — use LLM + sampled data to infer business semantics for uncommented columns, generating overlay YAMLs to lower the onboarding cost for new datasources
 - [ ] **Tool-use Agent** — upgrade to function-calling mode
 
 ---

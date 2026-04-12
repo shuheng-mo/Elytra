@@ -9,7 +9,7 @@ experience pool, keyed on the user's query embedding.
 State contract:
     Reads:  ``retry_count``, ``execution_success``, ``correction_history``,
             ``user_query``, ``generated_sql``, ``active_source``, ``intent``,
-            ``model_used``
+            ``model_used``, ``query_embedding``
     Writes: ``experience_saved`` (bool)
 """
 
@@ -21,14 +21,13 @@ from functools import lru_cache
 from src.evolution.experience_store import ExperienceRecord, ExperienceStore
 from src.models.state import AgentState
 from src.observability.errors import ErrorType, classify_error
-from src.retrieval.embedder import Embedder
+from src.retrieval.embedder import get_embedder
 
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1)
-def _embedder() -> Embedder:
-    return Embedder()
+def _embedder():
+    return get_embedder()
 
 
 @lru_cache(maxsize=1)
@@ -69,11 +68,14 @@ def save_experience_node(state: AgentState) -> dict:
         retry_count=int(state.get("retry_count", 0)),
     )
 
-    try:
-        embedding = _embedder().embed(record.user_query)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("save_experience: embed failed (%s)", exc)
-        return {"experience_saved": False}
+    # Reuse embedding cached by retrieve_schema_node if available
+    embedding = state.get("query_embedding")
+    if embedding is None:
+        try:
+            embedding = _embedder().embed(record.user_query)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("save_experience: embed failed (%s)", exc)
+            return {"experience_saved": False}
 
     row_id = _store().save(record, embedding)
     if row_id is None:

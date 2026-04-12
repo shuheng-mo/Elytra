@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from src.db.connection import get_cursor
 from src.evolution.feedback_store import FeedbackStore
-from src.retrieval.embedder import Embedder
+from src.retrieval.embedder import Embedder, get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,8 @@ class FeedbackResponse(BaseModel):
     message: str = ""
 
 
-@lru_cache(maxsize=1)
 def _embedder() -> Embedder:
-    return Embedder()
+    return get_embedder()
 
 
 @lru_cache(maxsize=1)

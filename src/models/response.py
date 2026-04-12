@@ -38,6 +38,8 @@ class QueryResponse(BaseModel):
     history_id: Optional[int] = None
     session_id: Optional[str] = None
     sanitizer_violations: list[str] = Field(default_factory=list)
+    # Per-node latency breakdown for performance diagnostics
+    node_timings: Optional[dict[str, float]] = None
 
 
 # ---------------------------------------------------------------------------

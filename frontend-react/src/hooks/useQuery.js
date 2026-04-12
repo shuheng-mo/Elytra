@@ -27,6 +27,10 @@ function agentStateToResponse(state) {
     user_role: state.user_role || null,
     tables_filtered: 0,
     chart_spec: state.chart_spec || null,
+    history_id: state.history_id ?? null,
+    session_id: state.session_id || null,
+    sanitizer_violations: state.sanitizer_violations || [],
+    node_timings: state.node_timings || null,
   };
 }
 

@@ -127,10 +127,12 @@ class TestModelRouter:
     def test_multi_join_uses_strong(self):
         assert route_model("multi_join", _schemas("a", "b")) == settings.default_strong_model
 
-    def test_three_or_more_tables_uses_strong(self):
+    def test_simple_query_uses_cheap_even_with_many_tables(self):
+        # Intent-first routing: simple_query always uses cheap model,
+        # regardless of how many tables the retriever returned.
         assert (
             route_model("simple_query", _schemas("a", "b", "c"))
-            == settings.default_strong_model
+            == settings.default_cheap_model
         )
 
     def test_exploration_uses_strong(self):
@@ -161,26 +163,27 @@ class _LLMRaisesError(Exception):
 
 
 class TestIntentClassifierNode:
-    def test_uses_heuristic_when_llm_unavailable(self, monkeypatch):
-        def boom(*args, **kwargs):
-            raise _LLMRaisesError("no api key")
-
-        monkeypatch.setattr(ic_module, "chat_complete", boom)
+    def test_heuristic_aggregation(self):
         state = make_initial_state(user_query="按一级品类统计总销售额")
         out = ic_module.classify_intent_node(state)
         # "总" is in the heuristic's aggregation keyword set
         assert out["intent"] == "aggregation"
         assert out["clarification_question"] is None
 
-    def test_heuristic_simple_query_default(self, monkeypatch):
-        monkeypatch.setattr(
-            ic_module,
-            "chat_complete",
-            lambda *a, **k: (_ for _ in ()).throw(_LLMRaisesError("offline")),
-        )
+    def test_heuristic_simple_query_default(self):
         state = make_initial_state(user_query="给我看一下 user_id=42 的信息")
         out = ic_module.classify_intent_node(state)
         assert out["intent"] == "simple_query"
+
+    def test_heuristic_exploration(self):
+        state = make_initial_state(user_query="分析一下用户留存原因")
+        out = ic_module.classify_intent_node(state)
+        assert out["intent"] == "exploration"
+
+    def test_heuristic_multi_join(self):
+        state = make_initial_state(user_query="订单和用户表关联查看")
+        out = ic_module.classify_intent_node(state)
+        assert out["intent"] == "multi_join"
 
 
 class _StubConnector:

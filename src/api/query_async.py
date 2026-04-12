@@ -64,13 +64,17 @@ async def post_query_async(req: QueryRequest, request: Request) -> TaskSubmitRes
             active_source=source_name,
             user_id=req.user_id or "",
         )
-        _persist_history(state)
+        history_id = _persist_history(state)
+        if history_id is not None:
+            state["history_id"] = history_id
         return state
 
     # Happy path: astream_events captures state mid-run, so the manager
     # invokes this persist callback separately.
     def _persist(state: dict):
-        _persist_history(state)
+        history_id = _persist_history(state)
+        if history_id is not None:
+            state["history_id"] = history_id
 
     # Schedule execution in the background with progress streaming
     asyncio.create_task(

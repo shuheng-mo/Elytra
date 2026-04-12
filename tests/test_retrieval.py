@@ -187,6 +187,7 @@ class _StubEmbedder:
         top_n: int = 20,
         *,
         source_name: str | None = None,
+        query_embedding: list[float] | None = None,
     ) -> Iterable[tuple[str, float]]:
         if self._raise:
             raise RuntimeError("simulated DB outage")

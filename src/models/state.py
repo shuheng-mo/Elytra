@@ -83,6 +83,10 @@ class AgentState(TypedDict, total=False):
     experience_saved: bool  # True if this run contributed a row to experience_pool
     history_id: Optional[int]  # id returned by query_history INSERT ... RETURNING id
 
+    # ----- Performance observability -----
+    node_timings: dict[str, float]  # {node_name: elapsed_ms} per-node latency
+    query_embedding: Optional[list[float]]  # cached embedding for the user_query
+
 
 def make_initial_state(
     user_query: str,
@@ -123,4 +127,6 @@ def make_initial_state(
         dynamic_examples={},
         experience_saved=False,
         history_id=None,
+        node_timings={},
+        query_embedding=None,
     )

@@ -8,7 +8,7 @@ from typing import Any
 
 from src.config import settings
 from src.retrieval.bm25_index import BM25Index
-from src.retrieval.embedder import Embedder
+from src.retrieval.embedder import Embedder, get_embedder
 from src.retrieval.schema_loader import SchemaLoader, TableInfo
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ class HybridRetriever:
         self.tables = [t for t in source_tables if t.layer not in EXCLUDED_LAYERS]
         self.table_lookup: dict[str, TableInfo] = {t.name: t for t in self.tables}
         self.bm25 = BM25Index(self.tables)
-        self.embedder = embedder or Embedder()
+        self.embedder = embedder or get_embedder()
         self.bm25_weight = (
             bm25_weight if bm25_weight is not None else settings.bm25_weight
         )
@@ -98,7 +98,12 @@ class HybridRetriever:
             vector_weight if vector_weight is not None else settings.vector_weight
         )
 
-    def retrieve(self, query: str, top_n: int = 10) -> list[RetrievalResult]:
+    def retrieve(
+        self,
+        query: str,
+        top_n: int = 10,
+        query_embedding: list[float] | None = None,
+    ) -> list[RetrievalResult]:
         # 1. BM25 retrieval over the in-memory index
         bm25_scores: dict[str, float] = dict(
             self.bm25.search_by_name(query, top_n=20)
@@ -113,7 +118,8 @@ class HybridRetriever:
         if hasattr(self.embedder, "search_mixed"):
             try:
                 mixed = self.embedder.search_mixed(
-                    query, top_n=20, source_name=self.source_name
+                    query, top_n=20, source_name=self.source_name,
+                    query_embedding=query_embedding,
                 )
                 for row in mixed.get("tables", []):
                     name = row["table_name"]
@@ -136,7 +142,8 @@ class HybridRetriever:
         else:
             try:
                 for name, score in self.embedder.search(
-                    query, top_n=20, source_name=self.source_name
+                    query, top_n=20, source_name=self.source_name,
+                    query_embedding=query_embedding,
                 ):
                     if name in self.table_lookup:
                         vector_scores[name] = score

@@ -10,6 +10,7 @@ import { PermissionBadge } from '../shared/PermissionBadge';
 import { Button } from '../ui/button';
 import { useQueryRunner } from '../../hooks/useQuery';
 import { formatDuration, getOrCreateSessionId, rotateSessionId } from '../../lib/utils';
+import { useSettings } from '../../lib/settings';
 import { api } from '../../lib/api';
 
 // v0.5.0 — QueryPage is now a multi-turn conversation surface:
@@ -84,7 +85,8 @@ export function QueryPage({
 
   const toggleMode = () => runner.setMode(runner.mode === 'sync' ? 'async' : 'sync');
   const resp = runner.response;
-  const currentRole = turns[turns.length - 1]?.user_role || resp?.user_role || 'analyst';
+  const { currentIdentity } = useSettings();
+  const currentRole = turns[turns.length - 1]?.user_role || resp?.user_role || currentIdentity.role;
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 px-8 py-8">

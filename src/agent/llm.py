@@ -77,38 +77,57 @@ def _make_openai_client(api_key: str, base_url: str | None = None):
     return OpenAI(api_key=api_key, timeout=timeout)
 
 
+# Module-level client cache — reuses TCP/TLS connections across calls.
+_client_cache: dict[str, tuple[Any, str]] = {}
+
+
 def _resolve_client(model: str) -> tuple[Any, str]:
     """Pick a client and (possibly normalized) model name.
 
     Returns ``(client, effective_model_name)``.
+
+    Clients are cached at module scope so TCP/TLS connections are reused
+    across calls, saving ~1-2s per LLM request.
     """
     # 1. OpenRouter takes precedence whenever its key is present
     if settings.openrouter_api_key:
-        client = _make_openai_client(
-            settings.openrouter_api_key,
-            base_url=settings.openrouter_base_url,
-        )
-        return client, _normalize_model(model)
+        cache_key = "openrouter"
+        if cache_key not in _client_cache:
+            client = _make_openai_client(
+                settings.openrouter_api_key,
+                base_url=settings.openrouter_base_url,
+            )
+            _client_cache[cache_key] = (client, "")
+        return _client_cache[cache_key][0], _normalize_model(model)
 
     # 2. Per-vendor fallbacks (legacy path)
     name = model.lower()
     if "deepseek" in name:
         if not settings.deepseek_api_key:
             raise RuntimeError("DEEPSEEK_API_KEY is not configured.")
-        return (
-            _make_openai_client(
-                settings.deepseek_api_key, base_url="https://api.deepseek.com"
-            ),
-            model,
-        )
+        cache_key = "deepseek"
+        if cache_key not in _client_cache:
+            _client_cache[cache_key] = (
+                _make_openai_client(
+                    settings.deepseek_api_key, base_url="https://api.deepseek.com"
+                ),
+                model,
+            )
+        return _client_cache[cache_key][0], model
     if "claude" in name or "anthropic" in name:
-        return _AnthropicAdapter(), model
+        cache_key = "anthropic"
+        if cache_key not in _client_cache:
+            _client_cache[cache_key] = (_AnthropicAdapter(), model)
+        return _client_cache[cache_key][0], model
     if not settings.openai_api_key:
         raise RuntimeError(
             "No LLM provider configured. Set OPENROUTER_API_KEY or one of "
             "OPENAI_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY."
         )
-    return _make_openai_client(settings.openai_api_key), model
+    cache_key = "openai"
+    if cache_key not in _client_cache:
+        _client_cache[cache_key] = (_make_openai_client(settings.openai_api_key), model)
+    return _client_cache[cache_key][0], model
 
 
 # ---------------------------------------------------------------------------

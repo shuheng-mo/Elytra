@@ -178,7 +178,14 @@ class _LocalProvider:
         self.model = model
         self.dim = dim
         logger.info("Loading local embedding model %s …", model)
-        self._encoder = SentenceTransformer(model)
+        # local_files_only skips ~15 HuggingFace HEAD requests per load
+        # (each 300-500ms) when the model is already cached on disk.
+        try:
+            self._encoder = SentenceTransformer(model, local_files_only=True)
+        except OSError:
+            # First-ever download: fall back to online mode
+            logger.info("Model not cached locally, downloading from HuggingFace …")
+            self._encoder = SentenceTransformer(model)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -469,18 +476,16 @@ class Embedder:
         top_n: int = 20,
         *,
         source_name: str | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[tuple[str, float]]:
         """Cosine-similarity search over table-level rows.
 
         If ``source_name`` is given, results are restricted to that source.
         ``None`` searches across all sources (only useful for diagnostics).
 
-        This preserves the legacy signature used by ``HybridRetriever`` —
-        v0.5.0 added column-level rows to ``schema_embeddings`` but this
-        method still only returns table-level matches. Use
-        :meth:`search_mixed` when the caller needs column-level hits.
+        When ``query_embedding`` is provided, the embed step is skipped.
         """
-        vec_literal = _to_pgvector(self.embed(query))
+        vec_literal = _to_pgvector(query_embedding or self.embed(query))
         with get_cursor(dict_rows=True) as cur:
             if source_name:
                 cur.execute(
@@ -516,6 +521,7 @@ class Embedder:
         top_n: int = 20,
         *,
         source_name: str | None = None,
+        query_embedding: list[float] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         """Search returning both table-level and column-level hits separately.
 
@@ -526,12 +532,11 @@ class Embedder:
                 "columns": [{table_name, column_name, score}, ...],
             }
 
-        Used by ``HybridRetriever`` to merge column-level hits back into
-        their parent table score (with a configurable weight).
+        When ``query_embedding`` is provided, the embed step is skipped.
         """
         from typing import Any as _Any  # noqa: WPS433 — avoid unused import warning
 
-        vec_literal = _to_pgvector(self.embed(query))
+        vec_literal = _to_pgvector(query_embedding or self.embed(query))
         tables_out: list[dict[str, _Any]] = []
         cols_out: list[dict[str, _Any]] = []
 
@@ -672,3 +677,20 @@ class Embedder:
                     table,
                     target_dim,
                 )
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton — all consumers should call get_embedder() instead
+# of constructing Embedder() directly. This ensures the expensive
+# SentenceTransformer / OpenAI client is created exactly once.
+# ---------------------------------------------------------------------------
+
+_global_embedder: Embedder | None = None
+
+
+def get_embedder() -> Embedder:
+    """Return (and lazily create) the process-wide Embedder singleton."""
+    global _global_embedder  # noqa: PLW0603
+    if _global_embedder is None:
+        _global_embedder = Embedder()
+    return _global_embedder

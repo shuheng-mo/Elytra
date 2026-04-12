@@ -12,12 +12,15 @@ import {
   Download,
   Loader2,
   AlertCircle,
+  Settings as SettingsIcon,
+  Save,
 } from 'lucide-react';
 import { ACCENT_PRESETS, USER_IDENTITIES, useSettings } from '../../lib/settings';
 import { getOrCreateSessionId } from '../../lib/utils';
 import { cn } from '../../lib/utils';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { exportSessionBundle } from '../../lib/export';
+import { api } from '../../lib/api';
 
 function SectionHeader({ title, description }) {
   return (
@@ -38,10 +41,73 @@ const EXPORT_STAGE_LABELS = {
 };
 
 export function SettingsPage() {
-  const { settings, update, reset } = useSettings();
+  const { settings, update, reset, currentIdentity } = useSettings();
+  const isAdmin = currentIdentity.role === 'admin';
   const [sessionId, setSessionId] = useState(getOrCreateSessionId());
   const [exportStage, setExportStage] = useState(null); // null | stage string
   const [exportError, setExportError] = useState(null);
+
+  // Admin env config state
+  const [envVars, setEnvVars] = useState([]); // [{key, value, type, description}]
+  const [envDraft, setEnvDraft] = useState({}); // {key: editedValue}
+  const [envLoading, setEnvLoading] = useState(false);
+  const [envSaving, setEnvSaving] = useState(false);
+  const [envError, setEnvError] = useState(null);
+  const [envSuccess, setEnvSuccess] = useState(null);
+
+  const loadEnvConfig = useCallback(async () => {
+    setEnvLoading(true);
+    setEnvError(null);
+    try {
+      const res = await api.getConfig(settings.userId);
+      setEnvVars(res.items);
+      const draft = {};
+      for (const item of res.items) {
+        draft[item.key] = item.value;
+      }
+      setEnvDraft(draft);
+    } catch (err) {
+      setEnvError(err.message || String(err));
+    } finally {
+      setEnvLoading(false);
+    }
+  }, [settings.userId]);
+
+  // Load env config when admin role is active
+  useEffect(() => {
+    if (isAdmin) {
+      loadEnvConfig();
+    }
+  }, [isAdmin, loadEnvConfig]);
+
+  const handleEnvSave = async () => {
+    // Only send changed values
+    const updates = {};
+    for (const item of envVars) {
+      if (envDraft[item.key] !== item.value) {
+        updates[item.key] = envDraft[item.key];
+      }
+    }
+    if (Object.keys(updates).length === 0) {
+      setEnvSuccess('没有需要保存的更改');
+      setTimeout(() => setEnvSuccess(null), 2000);
+      return;
+    }
+    setEnvSaving(true);
+    setEnvError(null);
+    setEnvSuccess(null);
+    try {
+      const res = await api.updateConfig(settings.userId, updates);
+      setEnvSuccess(res.message || '配置已更新');
+      // Reload to get fresh values
+      await loadEnvConfig();
+      setTimeout(() => setEnvSuccess(null), 3000);
+    } catch (err) {
+      setEnvError(err.message || String(err));
+    } finally {
+      setEnvSaving(false);
+    }
+  };
 
   const resetSession = () => {
     localStorage.removeItem('elytra_session_id');
@@ -329,6 +395,107 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Admin-only: Runtime Environment Config */}
+      {isAdmin && (
+        <Card>
+          <SectionHeader
+            title="运行时环境配置"
+            description="修改后端环境变量并热加载，无需重启服务（仅管理员可见）"
+          />
+          <CardContent>
+            {envLoading ? (
+              <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                <Loader2 className="h-4 w-4 animate-spin" /> 加载配置中…
+              </div>
+            ) : envError && envVars.length === 0 ? (
+              <div className="flex items-center gap-2 text-sm text-[var(--accent-error)]">
+                <AlertCircle className="h-4 w-4" /> {envError}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  {envVars.map((item) => {
+                    const changed = envDraft[item.key] !== item.value;
+                    return (
+                      <div
+                        key={item.key}
+                        className="flex items-start gap-3 rounded-md border border-[var(--border-color)] px-3 py-2.5"
+                      >
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <code className="font-mono text-xs font-medium text-[var(--text-primary)]">
+                              {item.key}
+                            </code>
+                            <Badge variant="secondary" className="font-mono text-[10px]">
+                              {item.type}
+                            </Badge>
+                            {changed && (
+                              <Badge className="bg-[var(--accent-primary)] text-[10px] text-white">
+                                已修改
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-[var(--text-muted)]">{item.description}</div>
+                        </div>
+                        <input
+                          type="text"
+                          value={envDraft[item.key] ?? ''}
+                          onChange={(e) =>
+                            setEnvDraft((prev) => ({ ...prev, [item.key]: e.target.value }))
+                          }
+                          className={cn(
+                            'w-56 rounded border bg-[var(--bg-code)] px-2 py-1.5 font-mono text-xs text-[var(--text-primary)]',
+                            changed
+                              ? 'border-[var(--accent-primary)]'
+                              : 'border-[var(--border-color)]'
+                          )}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Button onClick={handleEnvSave} disabled={envSaving}>
+                    {envSaving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" /> 保存中…
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4" /> 保存并热加载
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadEnvConfig}
+                    disabled={envLoading}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" /> 重新加载
+                  </Button>
+                  {envSuccess && (
+                    <span className="flex items-center gap-1 text-xs text-[var(--accent-success)]">
+                      <Check className="h-3.5 w-3.5" /> {envSuccess}
+                    </span>
+                  )}
+                  {envError && (
+                    <span className="flex items-center gap-1 text-xs text-[var(--accent-error)]">
+                      <AlertCircle className="h-3.5 w-3.5" /> {envError}
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[10px] text-[var(--text-muted)]">
+                  更改会立即写入 .env 文件并热加载到内存，无需重启后端。API 密钥等敏感配置不在此暴露。
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
