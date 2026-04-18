@@ -335,114 +335,38 @@ schema explorer, then try one of the example questions:
 
 ```text
 Elytra/
-├── docker-compose.yml             # db + backend + frontend-react (default)
-│                                  # frontend (Streamlit) under --profile fallback
-├── Dockerfile                     # backend image
-├── frontend-react/                # React SPA (default frontend)
-│   ├── Dockerfile                 # multi-stage: node build → nginx serve :3000
-│   ├── nginx.conf                 # SPA fallback + /api/ /ws/ reverse proxy
-│   ├── package.json               # Vite + React 18 + Tailwind + shadcn + ECharts
-│   └── src/                       # Layout / Sidebar / pages / hooks / lib
-├── frontend/                      # Streamlit fallback (cross-checking only)
-│   ├── Dockerfile                 # Python slim
-│   └── app.py                     # single-file Streamlit application
-├── pyproject.toml                 # uv / pip deps + ruff config
-├── .env.example                   # API key + model + retrieval template
+├── docker-compose.yml     # db + backend + frontend-react (default); --profile fallback adds Streamlit
+├── Dockerfile             # backend image
+├── pyproject.toml         # uv / pip deps + ruff config
+├── .env.example           # API key + model + retrieval template
 │
-├── config/
-│   ├── datasources.yaml           # primary multi-source registry
-│   ├── permissions.yaml           # role-based access control (analyst / operator / admin)
-│   └── overlays/                  # per-source schema enrichment YAML
+├── frontend-react/        # React SPA default frontend (Vite + Tailwind + shadcn + ECharts)
+├── frontend/              # Streamlit fallback (backend cross-checking)
 │
-├── db/
-│   ├── init.sql                   # PG schema (11 business + 2 system tables, with audit columns)
-│   ├── migrations/                # incremental migrations for existing databases
-│   ├── seed_data.sql              # simulated data
-│   └── data_dictionary.yaml       # bilingual data dictionary (also used as ecommerce_pg overlay)
-│
-├── datasets/
-│   ├── tpch/load_tpch.py          # DuckDB TPC-H generator (built-in dbgen)
-│   └── brazilian_ecommerce/       # Olist Kaggle CSV → DuckDB loader
-│
-├── docker/
-│   └── starrocks/                 # optional StarRocks docker compose + README
+├── config/                # datasources.yaml (multi-source registry) + permissions.yaml + overlays/ (schema enrichment)
+├── db/                    # init.sql + seed_data.sql + migrations/ + data_dictionary.yaml
+├── datasets/              # TPC-H + Brazilian E-Commerce loaders
+├── docker/                # optional StarRocks docker compose
 │
 ├── src/
-│   ├── config.py                  # global config (env vars)
-│   ├── main.py                    # FastAPI entrypoint with connector lifespan
-│   │
-│   ├── models/
-│   │   ├── request.py             # QueryRequest (with `source` / `user_id`)
-│   │   ├── response.py            # QueryResponse / ReplayResponse / AuditStatsResponse / ...
-│   │   ├── state.py               # AgentState (with `active_source` / `user_id` / `chart_spec`)
-│   │   └── task.py                # TaskStatus / TaskSubmitResponse / TaskStatusResponse
-│   │
-│   ├── connectors/                # pluggable data source layer
-│   │   ├── base.py                # DataSourceConnector ABC + dataclasses + safety filter
-│   │   ├── postgres_connector.py  # asyncpg
-│   │   ├── duckdb_connector.py    # embedded DuckDB
-│   │   ├── starrocks_connector.py # aiomysql (StarRocks MySQL protocol)
-│   │   ├── factory.py             # dialect → class with lazy import
-│   │   ├── registry.py            # singleton; primary YAML + user-layer YAML
-│   │   └── overlay.py             # TableMeta + YAML overlay → TableInfo
-│   │
-│   ├── db/
-│   │   ├── connection.py          # psycopg2 context managers (infra DB only)
-│   │   └── executor.py            # legacy shim (re-exports + sync wrapper)
-│   │
-│   ├── retrieval/
-│   │   ├── schema_loader.py       # YAML loader + load_from_connector + per-source cache
-│   │   ├── bm25_index.py          # CJK + Latin tokenizer + BM25Okapi
-│   │   ├── embedder.py            # OpenAI / OpenRouter / local backends + source-discriminated index
-│   │   ├── hybrid_retriever.py    # source-bound BM25 + vector fusion
-│   │   ├── reranker.py            # LLM-as-Reranker
-│   │   └── bootstrap.py           # multi-source bootstrap (--source flag)
-│   │
-│   ├── auth/
-│   │   └── permission.py          # YAML-driven role-based filter
-│   │
-│   ├── tasks/
-│   │   └── manager.py             # in-memory async task manager (Semaphore-bounded)
-│   │
-│   ├── chart/
-│   │   ├── inferrer.py            # rule engine: result shape → chart type
-│   │   └── echarts_builder.py     # ECharts-compatible JSON option builder
-│   │
-│   ├── agent/
-│   │   ├── graph.py               # LangGraph state machine (10 nodes) + run_agent_async
-│   │   ├── llm.py                 # OpenRouter-first chat helper
-│   │   ├── cost.py                # blended per-1M-token pricing → estimated_cost
-│   │   ├── nodes/                 # 10 nodes (incl. permission_filter + chart_generator)
-│   │   └── prompts/               # intent / sql_generation (with DIALECT_INSTRUCTIONS) / ...
-│   │
-│   ├── router/
-│   │   └── model_router.py        # rule engine: cheap / strong routing
-│   │
-│   └── api/
-│       ├── query.py               # POST /api/query (async, source-aware, audit persist)
-│       ├── query_async.py         # POST /api/query/async + GET /api/task/{id}
-│       ├── ws.py                  # WebSocket /ws/task/{id} (real-time progress)
-│       ├── audit.py               # POST /api/replay/{id} + GET /api/audit/stats
-│       ├── schema.py              # GET  /api/schema?source=
-│       ├── datasources.py         # GET / POST / DELETE /api/datasources + /types
-│       └── history.py             # GET  /api/history
+│   ├── config.py          # global config (env vars)
+│   ├── main.py            # FastAPI entrypoint with connector lifespan
+│   ├── models/            # Pydantic request/response + AgentState + Task models
+│   ├── connectors/        # pluggable data source layer (PG / DuckDB / StarRocks) + factory / registry / overlay
+│   ├── db/                # psycopg2 infrastructure connection (metadata DB only)
+│   ├── retrieval/         # BM25 + pgvector hybrid retrieval + reranker + embedder + multi-source bootstrap
+│   ├── auth/              # YAML-driven role-based permission filter
+│   ├── tasks/             # in-memory async task manager (Semaphore-bounded)
+│   ├── chart/             # result shape → ECharts chart inference
+│   ├── observability/     # error classification + input sanitizer (5 rules)
+│   ├── evolution/         # experience_pool + query_feedback read/write (self-evolution)
+│   ├── agent/             # LangGraph state machine (13 nodes) + nodes/ + prompts/ + llm / cost
+│   ├── router/            # cheap / strong model routing
+│   └── api/               # REST + WebSocket routes (query / replay / audit / feedback / evolution / ws ...)
 │
-├── eval/
-│   ├── test_queries.yaml          # 14-case test set
-│   ├── run_eval.py                # eval runner
-│   └── results/                   # report output dir
-│
-├── tests/
-│   ├── test_connectors.py         # 32 cases — connector layer
-│   ├── test_retrieval.py          # 20 cases
-│   ├── test_agent.py              # 41 cases
-│   ├── test_api.py                # 16 cases
-│   ├── test_audit.py              # 9 cases — audit log + replay
-│   ├── test_permissions.py        # 17 cases — role-based filter
-│   ├── test_tasks.py              # 10 cases — async task manager
-│   └── test_chart.py              # 25 cases — chart inferrer + ECharts builder
-│
-├── assets/                        # project logo
+├── eval/                  # test set + eval runner + report output
+├── tests/                 # unit tests (207 passing in ~8s)
+├── assets/                # project logo
 └── README.md
 ```
 
@@ -772,15 +696,40 @@ Delivered (v0.6.0):
 - [x] **Feedback button fix** — async mode `history_id` now written back to state; frontend `agentStateToResponse` maps `history_id`/`session_id` correctly
 - [x] **PermissionBadge fix** — QueryPage role display reads from `useSettings()` instead of hardcoded `'analyst'`
 
-Next-phase highlights:
+Next-phase highlights (v0.7 → v1.0, positioning Elytra in the **Text-to-Analytics Pipeline** category with a two-moat "verification + modeling" strategy):
 
-- [ ] **NL2Insight proactive analysis** — evolve from passive Q&A to agent-driven multi-step drill-down (trend → anomaly → root cause → recommendation); automatically chain multi-turn results into a structured analysis report
-- [ ] **Lineage-aware SQL generation** — integrate a table-level lineage graph so retrieval can auto-expand related tables along foreign-key paths and pick optimal JOIN strategies, eliminating missed recalls from pure semantic matching
-- [ ] **Federated query (cross-source JOIN)** — the agent decomposes cross-datasource questions into sub-queries dispatched to different engines, with DuckDB as an in-memory intermediate layer for cross-engine result merging
-- [ ] **Private LLM deployment** — first-class support for vLLM / Ollama local inference backends; chat + embedding fully air-gapped for data-sovereignty compliance
-- [ ] **Enterprise IAM integration** — plug `PermissionContext` into LDAP / SSO / Apache Ranger instead of the current static YAML, enabling dynamic role resolution and audit-trail compliance
-- [ ] **Auto schema annotation** — use LLM + sampled data to infer business semantics for uncommented columns, generating overlay YAMLs to lower the onboarding cost for new datasources
-- [ ] **Tool-use Agent** — upgrade to function-calling mode
+**v0.7.0 — Trustworthy SQL** (Verification Loop, the hallucinated-SQL safety net)
+
+- [ ] **SQL AST static validation** — introduce `sqlglot` to parse every generated SQL; validate tables/columns against the `retrieved_schemas` whitelist; reject hallucinated identifiers and suspicious JOIN conditions
+- [ ] **EXPLAIN dry-run layer** — add an `explain()` abstract to `DataSourceConnector` implemented by each dialect; pre-intercept queries with anomalous row estimates, empty result sets, or type mismatches before real execution
+- [ ] **Result sanity check** — magnitude comparison against historical same-template queries, anomalous group count, NaN/Inf/empty-set detection; flagged results surface via `verification_flagged` without hard-blocking
+- [ ] **Multi-path generation + majority voting** — for high-complexity queries, generate 3 candidates concurrently (different temperatures or models) and pick the majority winner after sqlglot normalization
+- [ ] **Hard-negative benchmark** — expand the eval set from 17 to 50 cases plus 10 "known-bad SQL" hard-negatives; ship an A/B runner that compares interception rate before vs after verification
+
+**v0.8.0 — Schema Intelligence Lite** (dirty-schema automation)
+
+- [ ] **Column-level profiling cron** — weekly sampling of distinct count / null% / sample values written to a `column_profile` table that feeds into retriever weighting
+- [ ] **Automatic FK/PK discovery** — infer cross-table relationships via value-overlap ratio (> 0.9) + naming heuristics (`*_id`) + type compatibility
+- [ ] **Schema drift detection** — diff each introspection against the previous snapshot; log additions / deletions / type changes, alert within 24h
+- [ ] **Auto-overlay generation** — let the LLM propose column display names and business descriptions into `config/overlays/<source>.auto.yaml`; manual overlay always wins on conflict
+
+**v0.9.0 — Semantic Layer + Public Benchmark** (the data spine of the external narrative)
+
+- [ ] **Metric proposer + review UI** — from `query_history` + profiling, propose business metric definitions ("active user", "GMV", ...); a new `SemanticReviewPage` supports human-in-the-loop approval
+- [ ] **Spider 2.0 enterprise subset scoreboard** — run BigQuery + Snowflake verticals (30 cases each); target pass rate ≥ 35%
+- [ ] **In-house Chinese enterprise schema benchmark v1** — 100 cases spanning ODS/DWD/DWS layers and multiple dialects; target accuracy ≥ 75%
+- [ ] **Public leaderboard page** — track v0.5 → v0.9 trajectory across four benchmarks
+
+**v1.0.0 — Polish & Public Launch** (GA + distribution)
+
+- [ ] **English README + 3-minute Docker Compose quickstart** — lower the GitHub onboarding friction
+- [ ] **Technical whitepaper + blog posts + demo videos** — complete narrative for Verification + Schema Intelligence, suitable for a workshop submission
+- [ ] **Public GA release** — Show HN / r/dataengineering / a16z newsletter
+- [ ] **3 real-world case studies** — co-authored with seed users
+
+**v1.1+ candidate pool** (prioritized post-GA based on community feedback, nothing pre-committed): federated cross-source queries (DuckDB as the in-memory federation layer), dbt package integration, VSCode extension, private LLM deployment (vLLM / Ollama), enterprise IAM (LDAP/SSO/Ranger), Multi-Hop query decomposition, tool-use / function-calling agent, row-level security + data masking, K8s Helm chart.
+
+See `Text-to-Analytics赛道研究_Elytra定位分析.md` for the detailed roadmap (per-phase acceptance metrics, file-level change inventory, risk rollback plans, effort allocation).
 
 ---
 

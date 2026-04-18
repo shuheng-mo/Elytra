@@ -327,113 +327,38 @@ cd frontend-react && npm install && npm run dev
 
 ```text
 Elytra/
-├── docker-compose.yml             # db + backend + frontend-react（默认）
-│                                  # frontend (Streamlit) 在 --profile fallback 下可用
-├── Dockerfile                     # 后端镜像
-├── frontend-react/                # React SPA（默认前端）
-│   ├── Dockerfile                 # 多阶段：node build → nginx serve :3000
-│   ├── nginx.conf                 # SPA fallback + /api/ /ws/ 反代 backend
-│   ├── package.json               # Vite + React 18 + Tailwind + shadcn + ECharts
-│   └── src/                       # Layout / Sidebar / QueryPage / SchemaExplorer …
-├── frontend/                      # Streamlit 备用前端（用于联调对拍）
-│   ├── Dockerfile                 # Python slim
-│   └── app.py                     # 单文件 Streamlit 应用
-├── pyproject.toml                 # uv / pip 依赖 + ruff 配置
-├── .env.example                   # API key + 模型 + 检索权重模板
+├── docker-compose.yml     # db + backend + frontend-react（默认），--profile fallback 可加 Streamlit
+├── Dockerfile             # 后端镜像
+├── pyproject.toml         # uv / pip 依赖 + ruff 配置
+├── .env.example           # API key + 模型 + 检索权重模板
 │
-├── config/
-│   ├── datasources.yaml           # 多数据源注册表（PG / DuckDB / StarRocks）
-│   ├── permissions.yaml           # 角色权限配置（analyst / operator / admin）
-│   └── overlays/                  # 各数据源的 schema 富化 YAML
+├── frontend-react/        # React SPA 默认前端（Vite + Tailwind + shadcn + ECharts）
+├── frontend/              # Streamlit 备用前端（前后端联调对拍）
 │
-├── db/
-│   ├── init.sql                   # PG 初始化（11 张业务表 + 2 张系统表，含审计字段）
-│   ├── migrations/                # 增量迁移脚本（已有库使用）
-│   ├── seed_data.sql              # 模拟数据
-│   └── data_dictionary.yaml       # 数据字典（中英双语，同时作为 ecommerce_pg 的 overlay）
-│
-├── datasets/
-│   ├── tpch/load_tpch.py          # DuckDB TPC-H 生成器（内置 dbgen）
-│   └── brazilian_ecommerce/       # Olist Kaggle CSV → DuckDB 加载脚本
-│
-├── docker/
-│   └── starrocks/                 # 可选 StarRocks docker compose + README
+├── config/                # datasources.yaml（多源注册）+ permissions.yaml + overlays/（schema 富化）
+├── db/                    # init.sql + seed_data.sql + migrations/ + data_dictionary.yaml
+├── datasets/              # TPC-H + Brazilian E-Commerce 数据集加载脚本
+├── docker/                # 可选 StarRocks docker compose
 │
 ├── src/
-│   ├── config.py                  # 全局配置（环境变量读取）
-│   ├── main.py                    # FastAPI 入口（含 connector lifespan）
-│   │
-│   ├── models/
-│   │   ├── request.py             # QueryRequest（含 source / user_id 字段）
-│   │   ├── response.py            # QueryResponse / ReplayResponse / AuditStatsResponse / ...
-│   │   ├── state.py               # AgentState（含 active_source / user_id / chart_spec）
-│   │   └── task.py                # TaskStatus / TaskSubmitResponse / TaskStatusResponse
-│   │
-│   ├── connectors/                # 新增：可插拔数据源连接层
-│   │   ├── base.py                # DataSourceConnector ABC + 数据类 + 安全过滤
-│   │   ├── postgres_connector.py  # asyncpg
-│   │   ├── duckdb_connector.py    # 嵌入式 DuckDB
-│   │   ├── starrocks_connector.py # aiomysql (StarRocks MySQL 协议)
-│   │   ├── factory.py             # dialect → 类，懒导入可选驱动
-│   │   ├── registry.py            # 单例 + init_from_yaml + 环境变量展开
-│   │   └── overlay.py             # TableMeta + YAML overlay → TableInfo
-│   │
-│   ├── db/
-│   │   ├── connection.py          # psycopg2 上下文管理器（仅服务基础设施 DB）
-│   │   └── executor.py            # 兼容 shim（重导出 + 同步 wrapper）
-│   │
-│   ├── retrieval/
-│   │   ├── schema_loader.py       # YAML loader + load_from_connector + per-source 缓存
-│   │   ├── bm25_index.py          # CJK + Latin tokenizer + BM25Okapi
-│   │   ├── embedder.py            # OpenAI / OpenRouter / 本地三后端 + source 维度索引
-│   │   ├── hybrid_retriever.py    # 单源 BM25 + 向量混合
-│   │   ├── reranker.py            # LLM-as-Reranker
-│   │   └── bootstrap.py           # 多源 bootstrap（--source 单源重建）
-│   │
-│   ├── auth/
-│   │   └── permission.py          # YAML 驱动的角色权限过滤器
-│   │
-│   ├── tasks/
-│   │   └── manager.py             # 内存异步任务管理器（Semaphore 并发控制）
-│   │
-│   ├── chart/
-│   │   ├── inferrer.py            # 规则引擎：结果形状 → 图表类型推断
-│   │   └── echarts_builder.py     # ECharts 兼容 JSON 配置生成
-│   │
-│   ├── agent/
-│   │   ├── graph.py               # LangGraph 状态机（10 节点）+ run_agent_async
-│   │   ├── llm.py                 # OpenRouter-first chat 调用
-│   │   ├── nodes/                 # 10 个节点（含 permission_filter + chart_generator）
-│   │   └── prompts/               # intent / sql_generation（含 DIALECT_INSTRUCTIONS） / ...
-│   │
-│   ├── router/
-│   │   └── model_router.py        # 规则引擎：cheap / strong 模型路由
-│   │
-│   └── api/
-│       ├── query.py               # POST /api/query（async，source-aware，含审计持久化）
-│       ├── query_async.py         # POST /api/query/async + GET /api/task/{id}
-│       ├── ws.py                  # WebSocket /ws/task/{id}（实时进度推送）
-│       ├── audit.py               # POST /api/replay/{id} + GET /api/audit/stats
-│       ├── schema.py              # GET  /api/schema?source=
-│       ├── datasources.py         # GET  /api/datasources
-│       └── history.py             # GET  /api/history
+│   ├── config.py          # 全局配置（环境变量读取）
+│   ├── main.py            # FastAPI 入口（含 connector lifespan）
+│   ├── models/            # Pydantic 请求/响应 + AgentState + Task 模型
+│   ├── connectors/        # 可插拔数据源层（PG / DuckDB / StarRocks）+ factory / registry / overlay
+│   ├── db/                # psycopg2 基础设施连接（仅元数据 DB）
+│   ├── retrieval/         # BM25 + pgvector 混合检索 + reranker + embedder + 多源 bootstrap
+│   ├── auth/              # YAML 驱动的角色权限过滤器
+│   ├── tasks/             # 内存异步任务管理器（Semaphore 并发控制）
+│   ├── chart/             # 结果形状 → ECharts 图表推断
+│   ├── observability/     # 错误分类 + 输入 sanitizer（5 条规则）
+│   ├── evolution/         # experience_pool + query_feedback 读写（自我进化）
+│   ├── agent/             # LangGraph 状态机（13 节点）+ nodes/ + prompts/ + llm / cost
+│   ├── router/            # cheap / strong 模型路由
+│   └── api/               # REST + WebSocket 路由（query / replay / audit / feedback / evolution / ws …）
 │
-├── eval/
-│   ├── test_queries.yaml          # 14 case 测试集
-│   ├── run_eval.py                # 评估 runner
-│   └── results/                   # 评估报告输出
-│
-├── tests/
-│   ├── test_connectors.py         # 32 case — 连接器层
-│   ├── test_retrieval.py          # 20 case
-│   ├── test_agent.py              # 41 case
-│   ├── test_api.py                # 16 case
-│   ├── test_audit.py              # 9 case — 审计日志 + 回放
-│   ├── test_permissions.py        # 17 case — 权限过滤
-│   ├── test_tasks.py              # 10 case — 异步任务
-│   └── test_chart.py              # 25 case — 图表推断 + ECharts 构建
-│
-├── assets/                        # 项目 logo
+├── eval/                  # 测试集 + 评估 runner + 报告输出
+├── tests/                 # 单测（207 passing，约 8 秒跑完）
+├── assets/                # 项目 logo
 └── README.md
 ```
 
@@ -734,15 +659,40 @@ python eval/run_eval.py --api-url http://localhost:8000 --filter aggregation
 - [x] **Feedback 按钮修复** — async 模式 `history_id` 写回 state + 前端 `agentStateToResponse` 补全字段映射
 - [x] **权限 Badge 修复** — QueryPage 角色显示改为从 `useSettings()` 读取，不再硬编码 `analyst`
 
-下一阶段主要特性：
+下一阶段主要特性（v0.7 → v1.0，定位 **Text-to-Analytics Pipeline** 赛道，围绕"验证 + 建模"双护城河建设）：
 
-- [ ] **NL2Insight 主动分析模式** — 从被动问答升级为 Agent 自主规划多步下钻分析路径（趋势→异常→归因→建议），多轮查询结果自动串联为结构化分析报告
-- [ ] **数据血缘感知 SQL 生成** — 集成表间血缘图谱，检索时沿血缘自动扩展关联表、选择最优 JOIN 路径，解决纯语义匹配的漏召回问题
-- [ ] **联邦查询（跨源 JOIN）** — Agent 将跨数据源问题拆解为多个子查询分发至不同引擎，DuckDB 作为中间层在内存中完成跨引擎结果合并
-- [ ] **私有化 LLM 部署** — 支持 vLLM / Ollama 本地推理后端，chat + embedding 全链路内网闭环，满足数据不出域的合规要求
-- [ ] **企业 IAM 集成** — `PermissionContext` 对接 LDAP / SSO / Apache Ranger 等企业身份与权限系统，替换当前 YAML 静态配置
-- [ ] **Schema 自动标注** — 对无注释字段利用 LLM + 采样数据推测业务含义，生成 overlay YAML，降低新数据源接入门槛
-- [ ] **Tool-use Agent** — 升级为 function-calling 模式
+**v0.7.0 — Trustworthy SQL**（Verification Loop，幻觉 SQL 安全阀）
+
+- [ ] **SQL AST 静态校验** — 引入 `sqlglot` 解析所有生成的 SQL，表/列对照 `retrieved_schemas` 白名单验证，拦截幻觉 identifier 与异常 JOIN 条件
+- [ ] **EXPLAIN dry-run 层** — `DataSourceConnector` 增 `explain()` 抽象，各方言实现；对估计行数异常 / 空结果集 / 字段类型不匹配做执行前预拦截
+- [ ] **结果 sanity check** — 聚合量级跨历史比对、分组数异常、NaN/Inf、空集检测；可疑结果标记 `verification_flagged` 但不阻断
+- [ ] **多路径生成 + 多数投票** — 高复杂度查询并发 3 路径（不同 temperature 或模型），sqlglot 归一化后多数派胜出
+- [ ] **benchmark 硬测试集** — 测试集从 17 case 扩到 50 + 10 个"已知错误 SQL"硬测试，A/B runner 对比 verification 前后拦截率
+
+**v0.8.0 — Schema Intelligence Lite**（脏 schema 自动化）
+
+- [ ] **列级 profiling cron** — 周级采样 distinct count / null% / sample values，写入 `column_profile` 表驱动 retriever 加权
+- [ ] **FK/PK 自动发现** — 基于值重叠率（> 0.9）+ 命名启发式（`*_id`）+ 类型匹配推断跨表关系
+- [ ] **Schema drift 检测** — 每次 introspection 对比 diff，新增/删除/类型变化写审计日志，24h 内 alert
+- [ ] **Auto-overlay 生成** — LLM 自动 propose 字段中文名 + 业务描述，写入 `config/overlays/<source>.auto.yaml`；人工 overlay 永远胜出
+
+**v0.9.0 — Semantic Layer + Public Benchmark**（对外叙事的数字核心）
+
+- [ ] **指标 proposer + review UI** — 基于 query_history + profiling 推荐业务指标定义（"活跃用户"、"GMV" 等），前端 `SemanticReviewPage` 支持 human-in-the-loop 审核
+- [ ] **Spider 2.0 enterprise 子集跑分** — BigQuery + Snowflake vertical 各 30 case，目标 pass rate ≥ 35%
+- [ ] **自家中文企业 schema benchmark v1** — 100 case 覆盖 ODS/DWD/DWS 多层数仓 + 多方言，目标 accuracy ≥ 75%
+- [ ] **公开 leaderboard 页** — 对比 v0.5 → v0.9 在 4 个 benchmark 上的趋势
+
+**v1.0.0 — Polish & Public Launch**（GA + 分发）
+
+- [ ] **英文 README + 3 分钟 Docker Compose quickstart** — 降低 github onboarding 阻力
+- [ ] **技术白皮书 + blog post + demo video** — Verification + Schema Intelligence 完整技术叙事，可投 workshop
+- [ ] **公开 GA release** — Show HN / r/dataengineering / a16z newsletter
+- [ ] **3 个 real-world case study** — 与种子用户协作撰写
+
+**v1.1+ 候选池**（由 GA 后社区反馈排序，不预先承诺）：跨源联邦查询（DuckDB 联邦层）、dbt package 集成、VSCode 扩展、私有化 LLM（vLLM / Ollama）、企业 IAM（LDAP/SSO/Ranger）、Multi-Hop decompose、Tool-use function-calling agent、行级安全 + 数据脱敏、K8s helm chart。
+
+详细路线（含每 Phase 验收指标、文件改动、风险回退、工时分配）参见 `Text-to-Analytics赛道研究_Elytra定位分析.md`。
 
 ---
 
