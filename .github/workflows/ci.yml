@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # Cancel in-progress runs for the same ref when a new commit lands.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Lint + test (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies (dev extra only; skip local-embed to avoid torch)
+        # `--extra dev` installs pytest + pytest-asyncio + ruff.
+        # We deliberately do NOT install `--extra local-embed` — torch is ~700MB
+        # and unit tests use the in-memory _StubEmbedder, not real sentence-
+        # transformers. This keeps CI under ~90s.
+        run: uv sync --extra dev
+
+      - name: Ruff lint
+        # Catches real correctness issues (unused imports, undefined names,
+        # shadowing, etc.). Format check is intentionally NOT enforced here
+        # because the repo has ~45 files with pre-existing formatting drift
+        # from ruff's default style; unifying format is a separate chore.
+        # Contributors can still run ``ruff format .`` locally if they want.
+        run: uv run ruff check .
+
+      - name: Pytest
+        run: uv run pytest tests/ -v --tb=short

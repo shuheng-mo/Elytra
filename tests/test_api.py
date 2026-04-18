@@ -27,7 +27,6 @@ from fastapi.testclient import TestClient
 
 from src.api import history as history_module
 from src.api import query as query_module
-from src.api import schema as schema_module
 from src.connectors.base import QueryResult, TableMeta
 from src.connectors.registry import ConnectorRegistry
 from src.main import app

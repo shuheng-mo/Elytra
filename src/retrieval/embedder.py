@@ -1,6 +1,6 @@
 """Embedding generation and pgvector-backed semantic search.
 
-Three backends are supported, with a single ``Embedder`` facade selecting
+Five backends are supported, with a single ``Embedder`` facade selecting
 between them at construction time:
 
 * **openai**     — direct calls to ``api.openai.com`` (needs ``OPENAI_API_KEY``)
@@ -10,12 +10,19 @@ between them at construction time:
 * **local**      — ``sentence-transformers`` running on CPU/GPU (no key);
   recommended models are ``BAAI/bge-small-zh-v1.5`` (512-dim, ~100MB) and
   ``BAAI/bge-m3`` (1024-dim, multilingual)
+* **ollama**     — Ollama's OpenAI-compatible ``/v1/embeddings`` endpoint
+  (needs ``OLLAMA_BASE_URL`` and Ollama ≥ 0.2); use ``ollama/<model>`` names
+  like ``ollama/nomic-embed-text``
+* **vllm**       — self-hosted vLLM OpenAI server (needs ``VLLM_BASE_URL``);
+  use ``vllm/<model-id>`` names
 
 Provider auto-detection (when ``EMBEDDING_PROVIDER=auto``):
-    1. Model name starts with ``BAAI/`` or contains ``bge``  → local
-    2. Model name starts with ``openai/``                    → openrouter
+    1. Model name starts with ``ollama/``                    → ollama
+    2. Model name starts with ``vllm/``                      → vllm
+    3. Model name starts with ``BAAI/`` or contains ``bge``  → local
+    4. Model name starts with ``openai/``                    → openrouter
        (or openai-direct if only ``OPENAI_API_KEY`` is set)
-    3. Bare ``text-embedding-*``                             → openai-direct
+    5. Bare ``text-embedding-*``                             → openai-direct
        (falls back to openrouter if only OpenRouter is configured)
 
 Phase 1 indexes one row per table (column-level rows are reserved for Phase 2).
@@ -27,7 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Iterable, Protocol
+from typing import Any, Iterable, Protocol
 
 from src.config import settings
 from src.db.connection import get_cursor
@@ -57,6 +64,12 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
     "BAAI/bge-base-en-v1.5": 768,
     "BAAI/bge-large-en-v1.5": 1024,
     "BAAI/bge-m3": 1024,
+    # Ollama common embedding models (both bare and ollama/-prefixed forms)
+    "nomic-embed-text": 768,
+    "ollama/nomic-embed-text": 768,
+    "mxbai-embed-large": 1024,
+    "ollama/mxbai-embed-large": 1024,
+    "ollama/bge-m3": 1024,
 }
 
 
@@ -198,6 +211,82 @@ class _LocalProvider:
         return [v.tolist() for v in vectors]
 
 
+class _OllamaProvider:
+    """Embedding via Ollama's OpenAI-compatible ``/v1/embeddings`` endpoint.
+
+    Requires Ollama ≥ 0.2 with a model pulled first, e.g.::
+
+        ollama pull nomic-embed-text
+
+    Model names may be passed as ``ollama/nomic-embed-text`` (the prefix is
+    stripped before the API call) or as a bare name when the caller has
+    already stripped the prefix.
+    """
+
+    name = "ollama"
+
+    def __init__(self, model: str, dim: int):
+        from openai import OpenAI
+
+        if not settings.ollama_base_url:
+            raise RuntimeError(
+                "OLLAMA_BASE_URL is not configured; cannot use the ollama embedding backend."
+            )
+        # Strip ``ollama/`` prefix; Ollama doesn't expect vendor prefixes.
+        effective = (
+            model.split("/", 1)[1] if model.lower().startswith("ollama/") else model
+        )
+        self.model = effective
+        self.dim = dim
+        self._client = OpenAI(
+            api_key="ollama",  # Ollama ignores it; SDK requires non-empty
+            base_url=settings.ollama_base_url.rstrip("/") + "/v1",
+        )
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        resp = self._client.embeddings.create(model=self.model, input=texts)
+        return [d.embedding for d in resp.data]
+
+
+class _VLLMProvider:
+    """Embedding via a vLLM OpenAI-compatible server.
+
+    Launch vLLM with an embedding-capable model::
+
+        python -m vllm.entrypoints.openai.api_server --model <hf_model_id>
+
+    Then set ``VLLM_BASE_URL`` (e.g. ``http://localhost:8000``) and use a
+    model name of the form ``vllm/<whatever-model-id-vllm-was-started-with>``.
+    """
+
+    name = "vllm"
+
+    def __init__(self, model: str, dim: int):
+        from openai import OpenAI
+
+        if not settings.vllm_base_url:
+            raise RuntimeError(
+                "VLLM_BASE_URL is not configured; cannot use the vllm embedding backend."
+            )
+        effective = (
+            model.split("/", 1)[1] if model.lower().startswith("vllm/") else model
+        )
+        self.model = effective
+        self.dim = dim
+        self._client = OpenAI(
+            api_key="vllm",
+            base_url=settings.vllm_base_url.rstrip("/") + "/v1",
+        )
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        resp = self._client.embeddings.create(model=self.model, input=texts)
+        return [d.embedding for d in resp.data]
+
+
 # ---------------------------------------------------------------------------
 # Provider factory
 # ---------------------------------------------------------------------------
@@ -206,6 +295,21 @@ class _LocalProvider:
 def _auto_select_provider(model: str) -> str:
     """Decide which backend to use based on the model name + available keys."""
     name = model.lower()
+
+    # Explicit local-backend prefixes win immediately — user opted in by
+    # writing ``ollama/foo`` or ``vllm/foo`` in their .env.
+    if name.startswith("ollama/"):
+        if settings.ollama_base_url:
+            return "ollama"
+        raise RuntimeError(
+            f"Model {model!r} has ollama/ prefix but OLLAMA_BASE_URL is not set."
+        )
+    if name.startswith("vllm/"):
+        if settings.vllm_base_url:
+            return "vllm"
+        raise RuntimeError(
+            f"Model {model!r} has vllm/ prefix but VLLM_BASE_URL is not set."
+        )
 
     # Local takes precedence whenever the model name screams "local"
     if model.startswith("BAAI/") or "bge" in name:
@@ -267,6 +371,10 @@ def make_embedding_provider(
         return _OpenRouterProvider(model, resolved_dim)
     if provider == "local":
         return _LocalProvider(model, resolved_dim)
+    if provider == "ollama":
+        return _OllamaProvider(model, resolved_dim)
+    if provider == "vllm":
+        return _VLLMProvider(model, resolved_dim)
     raise ValueError(f"unknown embedding provider: {provider!r}")
 
 
@@ -534,11 +642,9 @@ class Embedder:
 
         When ``query_embedding`` is provided, the embed step is skipped.
         """
-        from typing import Any as _Any  # noqa: WPS433 — avoid unused import warning
-
         vec_literal = _to_pgvector(query_embedding or self.embed(query))
-        tables_out: list[dict[str, _Any]] = []
-        cols_out: list[dict[str, _Any]] = []
+        tables_out: list[dict[str, Any]] = []
+        cols_out: list[dict[str, Any]] = []
 
         with get_cursor(dict_rows=True) as cur:
             if source_name:

@@ -20,7 +20,6 @@ router = APIRouter(prefix="/api", tags=["async-query"])
 
 def _get_task_manager():
     """Retrieve the TaskManager singleton from app state."""
-    from src.tasks.manager import TaskManager
     # TaskManager is set on app.state during lifespan
     # This function is called at request time, not import time
     return getattr(_get_task_manager, "_instance", None)

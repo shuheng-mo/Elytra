@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
 from contextlib import contextmanager
-from typing import Any
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
 from src.api import audit as audit_module
-from src.api import query as query_module
 from src.api.query import _compute_result_hash
 from src.connectors.registry import ConnectorRegistry
 from src.main import app

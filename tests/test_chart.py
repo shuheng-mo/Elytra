@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
 
 from src.chart.inferrer import infer_chart_type, is_temporal, is_numeric, is_categorical
 from src.chart.echarts_builder import build_chart_spec

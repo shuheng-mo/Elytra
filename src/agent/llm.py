@@ -88,8 +88,39 @@ def _resolve_client(model: str) -> tuple[Any, str]:
 
     Clients are cached at module scope so TCP/TLS connections are reused
     across calls, saving ~1-2s per LLM request.
+
+    Resolution priority (first match wins):
+        1. ``ollama/*`` prefix + ``OLLAMA_BASE_URL`` set → local Ollama
+        2. ``vllm/*``  prefix + ``VLLM_BASE_URL``   set → self-hosted vLLM
+        3. ``OPENROUTER_API_KEY`` present → OpenRouter (any model)
+        4. Per-vendor fallbacks (DeepSeek / Anthropic / OpenAI)
     """
-    # 1. OpenRouter takes precedence whenever its key is present
+    name = model.lower()
+
+    # 1. Local / self-hosted backends — model-name prefix explicitly opts in.
+    #    These win over OpenRouter so users who set a local backend can still
+    #    keep an OpenRouter key in ``.env`` for other models.
+    if name.startswith("ollama/") and settings.ollama_base_url:
+        cache_key = "ollama"
+        if cache_key not in _client_cache:
+            client = _make_openai_client(
+                api_key="ollama",  # Ollama ignores it; OpenAI SDK requires non-empty
+                base_url=settings.ollama_base_url.rstrip("/") + "/v1",
+            )
+            _client_cache[cache_key] = (client, "")
+        return _client_cache[cache_key][0], model.split("/", 1)[1]
+
+    if name.startswith("vllm/") and settings.vllm_base_url:
+        cache_key = "vllm"
+        if cache_key not in _client_cache:
+            client = _make_openai_client(
+                api_key="vllm",
+                base_url=settings.vllm_base_url.rstrip("/") + "/v1",
+            )
+            _client_cache[cache_key] = (client, "")
+        return _client_cache[cache_key][0], model.split("/", 1)[1]
+
+    # 2. OpenRouter takes precedence whenever its key is present
     if settings.openrouter_api_key:
         cache_key = "openrouter"
         if cache_key not in _client_cache:
@@ -100,8 +131,7 @@ def _resolve_client(model: str) -> tuple[Any, str]:
             _client_cache[cache_key] = (client, "")
         return _client_cache[cache_key][0], _normalize_model(model)
 
-    # 2. Per-vendor fallbacks (legacy path)
-    name = model.lower()
+    # 3. Per-vendor fallbacks (legacy path) — reuses ``name`` from top of fn
     if "deepseek" in name:
         if not settings.deepseek_api_key:
             raise RuntimeError("DEEPSEEK_API_KEY is not configured.")

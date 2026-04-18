@@ -6,12 +6,13 @@
 
 **基于 LLM 的智能数据分析系统 — 自然语言进，SQL + 可视化出**
 
+[![CI](https://github.com/shuheng-mo/Elytra/actions/workflows/ci.yml/badge.svg)](https://github.com/shuheng-mo/Elytra/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-latest-1c3d5a.svg)](https://github.com/langchain-ai/langgraph)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791.svg)](https://github.com/pgvector/pgvector)
-[![Tests](https://img.shields.io/badge/tests-173%2F173%20passing-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-223%2F223%20passing-brightgreen.svg)](#测试)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 [简体中文](README.md) | [English](README_EN.md)
@@ -368,16 +369,38 @@ Elytra/
 
 所有配置都通过环境变量读取（`.env` 自动加载）。完整列表见 [.env.example](.env.example)。
 
-### LLM Provider（二选一）
+### LLM Provider
+
+云端与本地后端可同时配置，路由优先级：**模型名前缀 `ollama/*` 或 `vllm/*`（若对应 base URL 已设）> OpenRouter > per-vendor fallback**。
 
 | 变量 | 说明 |
 |:---|:---|
-| `OPENROUTER_API_KEY` | **推荐**。一个 key 路由所有 **chat** 模型，模型名要 `vendor/model` 格式 |
+| `OPENROUTER_API_KEY` | **推荐（云端默认）**。一个 key 路由所有 **chat** 模型，模型名要 `vendor/model` 格式 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` | 旧式 per-vendor key，仅当 OpenRouter key 为空时使用 |
+| `OLLAMA_BASE_URL` | 本地 [Ollama](https://ollama.com)（≥ 0.2）服务地址，例 `http://localhost:11434`。触发条件：模型名以 `ollama/*` 开头 |
+| `VLLM_BASE_URL` | 自托管 [vLLM](https://github.com/vllm-project/vllm) OpenAI-compatible server 地址，例 `http://localhost:8000`。触发条件：模型名以 `vllm/*` 开头 |
 
 > ⚠️ **OpenRouter 不代理 `/v1/embeddings` 端点**，只能路由 chat completions。
-> 因此 schema embedding 必须走"本地 sentence-transformers"或"OpenAI 直连"
-> 这两条路之一 —— 详见下方 [Embedding](#embedding三种后端自动选择) 一节。
+> 因此 schema embedding 必须走"本地 sentence-transformers"、"OpenAI 直连"、
+> "Ollama 本地" 或 "vLLM 自托管" 四条路之一 —— 详见下方 [Embedding](#embedding两种实际可用的后端) 一节。
+
+**本地/自托管后端使用示例**：
+
+```bash
+# Ollama：先 ollama pull 模型
+ollama pull qwen2.5:7b
+ollama pull nomic-embed-text
+# 在 .env 里
+OLLAMA_BASE_URL=http://localhost:11434
+DEFAULT_CHEAP_MODEL=ollama/qwen2.5:7b
+EMBEDDING_MODEL=ollama/nomic-embed-text
+
+# vLLM：先启动 OpenAI-compatible server
+python -m vllm.entrypoints.openai.api_server --model meta-llama/Llama-3.1-70B-Instruct
+# 在 .env 里
+VLLM_BASE_URL=http://localhost:8000
+DEFAULT_STRONG_MODEL=vllm/meta-llama/Llama-3.1-70B-Instruct
+```
 
 ### 模型
 
@@ -386,13 +409,15 @@ Elytra/
 | `DEFAULT_CHEAP_MODEL` | `deepseek/deepseek-chat` | 简单查询 / 一般聚合 |
 | `DEFAULT_STRONG_MODEL` | `anthropic/claude-sonnet-4` | 多表 / 探索 / 连续失败重试 |
 
-### Embedding（两种实际可用的后端）
+### Embedding（四种实际可用的后端）
 
 | 变量 | 行为 |
 |:---|:---|
 | `EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5` | **默认**。本地 sentence-transformers，512 维，~100MB，无需 API key、无需网络。中文场景召回质量好。需先 `uv sync --extra local-embed` |
 | `EMBEDDING_MODEL=text-embedding-3-small` | OpenAI 直连，1536 维。需要单独的 `OPENAI_API_KEY`（OpenRouter key **不行**） |
-| `EMBEDDING_PROVIDER` | `auto` (默认) / `openai` / `local` |
+| `EMBEDDING_MODEL=ollama/nomic-embed-text` | Ollama 本地，768 维。需 `OLLAMA_BASE_URL` + `ollama pull nomic-embed-text`。完全离线 |
+| `EMBEDDING_MODEL=vllm/<model_id>` | vLLM 自托管。需 `VLLM_BASE_URL` 指向 `--model <model_id>` 启动的 vLLM 实例 |
+| `EMBEDDING_PROVIDER` | `auto` (默认) / `openai` / `local` / `ollama` / `vllm` |
 | `EMBEDDING_DIM` | 默认 0 = 自动从已知模型查表，不匹配的模型需手动指定 |
 
 > ⚠️ **不要用 `text-embedding-3-large`（3072 维）**：pgvector 的 HNSW 索引有
@@ -690,9 +715,12 @@ python eval/run_eval.py --api-url http://localhost:8000 --filter aggregation
 - [ ] **公开 GA release** — Show HN / r/dataengineering / a16z newsletter
 - [ ] **3 个 real-world case study** — 与种子用户协作撰写
 
-**v1.1+ 候选池**（由 GA 后社区反馈排序，不预先承诺）：跨源联邦查询（DuckDB 联邦层）、dbt package 集成、VSCode 扩展、私有化 LLM（vLLM / Ollama）、企业 IAM（LDAP/SSO/Ranger）、Multi-Hop decompose、Tool-use function-calling agent、行级安全 + 数据脱敏、K8s helm chart。
+**已落地**（v0.6.x 基础设施补丁，不占用 hero feature 时间预算）：
 
-详细路线（含每 Phase 验收指标、文件改动、风险回退、工时分配）参见 `Text-to-Analytics赛道研究_Elytra定位分析.md`。
+- [x] **私有化 LLM 部署（Ollama / vLLM）** — chat + embedding 均支持 `ollama/*` 和 `vllm/*` 前缀路由
+- [x] **GitHub Actions CI** — ruff lint + pytest 全量回归，见 `.github/workflows/ci.yml`
+
+**v1.1+ 候选池**（由 GA 后社区反馈排序，不预先承诺）：跨源联邦查询（DuckDB 联邦层）、dbt package 集成、VSCode 扩展、企业 IAM（LDAP/SSO/Ranger）、Multi-Hop decompose、Tool-use function-calling agent、行级安全 + 数据脱敏、K8s helm chart
 
 ---
 

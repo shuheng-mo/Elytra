@@ -58,6 +58,13 @@ class Settings:
         "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
     )
 
+    # Local / self-hosted inference backends.
+    # When a model name starts with ``ollama/*`` or ``vllm/*`` and the
+    # corresponding base URL is set, the chat / embedding call is routed there
+    # instead of OpenRouter. Empty string = backend not available.
+    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "")
+    vllm_base_url: str = os.getenv("VLLM_BASE_URL", "")
+
     # Database
     database_url: str = os.getenv(
         "DATABASE_URL",
@@ -130,6 +137,8 @@ CONFIGURABLE_VARS: dict[str, tuple[str, type, str]] = {
     "COLUMN_RETRIEVAL_WEIGHT": ("column_retrieval_weight", float, "列级检索权重"),
     "MAX_CONCURRENT_TASKS": ("max_concurrent_tasks", int, "最大并发异步任务数"),
     "INTENT_CLASSIFIER": ("", str, "意图分类器（heuristic / llm）"),
+    "OLLAMA_BASE_URL": ("ollama_base_url", str, "Ollama 本地推理 base URL（空=未启用）"),
+    "VLLM_BASE_URL": ("vllm_base_url", str, "vLLM 自托管 base URL（空=未启用）"),
 }
 
 
@@ -147,6 +156,8 @@ def reload_settings() -> None:
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         openrouter_api_key=_detect_openrouter_key(),
         openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL", ""),
+        vllm_base_url=os.getenv("VLLM_BASE_URL", ""),
         database_url=os.getenv("DATABASE_URL", "postgresql://Elytra:Elytra_dev@localhost:5432/Elytra"),
         default_cheap_model=os.getenv("DEFAULT_CHEAP_MODEL", "deepseek/deepseek-chat"),
         default_strong_model=os.getenv("DEFAULT_STRONG_MODEL", "anthropic/claude-sonnet-4"),

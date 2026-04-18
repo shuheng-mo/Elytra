@@ -11,10 +11,12 @@ Run with::
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable
 
 import pytest
 
+import src.retrieval.embedder as embedder_mod
 from src.retrieval.bm25_index import BM25Index, tokenize
 from src.retrieval.hybrid_retriever import HybridRetriever, _min_max_normalize
 from src.retrieval.schema_loader import ColumnInfo, SchemaLoader, TableInfo
@@ -278,3 +280,63 @@ class TestSchemaLoaderRealDictionary:
         text = tbl.to_text()
         assert "订单明细宽表" in text
         assert "[DWD]" in text
+
+
+# ---------------------------------------------------------------------------
+# Embedder provider auto-selection (Ollama / vLLM routing)
+# ---------------------------------------------------------------------------
+
+
+def _patch_embedder_settings(monkeypatch, **overrides):
+    """Replace ``embedder_mod.settings`` with a frozen-dataclass copy that
+    has the requested API-key / base-URL fields overridden.
+
+    Defaults clear all keys so each test isolates one branch of the
+    provider-selection decision tree.
+    """
+    blank_defaults = {
+        "openai_api_key": "",
+        "openrouter_api_key": "",
+        "ollama_base_url": "",
+        "vllm_base_url": "",
+    }
+    blank_defaults.update(overrides)
+    new_settings = replace(embedder_mod.settings, **blank_defaults)
+    monkeypatch.setattr(embedder_mod, "settings", new_settings)
+
+
+class TestEmbedderAutoSelect:
+    def test_auto_select_ollama_prefix(self, monkeypatch):
+        _patch_embedder_settings(monkeypatch, ollama_base_url="http://localhost:11434")
+        assert embedder_mod._auto_select_provider("ollama/nomic-embed-text") == "ollama"
+
+    def test_auto_select_vllm_prefix(self, monkeypatch):
+        _patch_embedder_settings(monkeypatch, vllm_base_url="http://localhost:8000")
+        assert embedder_mod._auto_select_provider("vllm/BAAI/bge-m3") == "vllm"
+
+    def test_ollama_prefix_without_base_url_raises(self, monkeypatch):
+        _patch_embedder_settings(monkeypatch, ollama_base_url="")
+        with pytest.raises(RuntimeError, match="OLLAMA_BASE_URL"):
+            embedder_mod._auto_select_provider("ollama/nomic-embed-text")
+
+    def test_vllm_prefix_without_base_url_raises(self, monkeypatch):
+        _patch_embedder_settings(monkeypatch, vllm_base_url="")
+        with pytest.raises(RuntimeError, match="VLLM_BASE_URL"):
+            embedder_mod._auto_select_provider("vllm/anything")
+
+    def test_known_ollama_model_dims(self):
+        """Dim autodetection for common Ollama embedding models."""
+        assert embedder_mod._resolve_dim("ollama/nomic-embed-text") == 768
+        assert embedder_mod._resolve_dim("nomic-embed-text") == 768
+        assert embedder_mod._resolve_dim("ollama/mxbai-embed-large") == 1024
+        assert embedder_mod._resolve_dim("ollama/bge-m3") == 1024
+
+    def test_existing_branches_unchanged(self, monkeypatch):
+        """Regression: the original local / openai / openrouter auto-select
+        logic must keep working with Ollama/vLLM base URLs unset."""
+        _patch_embedder_settings(monkeypatch, openai_api_key="sk-real")
+        assert embedder_mod._auto_select_provider("BAAI/bge-small-zh-v1.5") == "local"
+        assert embedder_mod._auto_select_provider("text-embedding-3-small") == "openai"
+
+        _patch_embedder_settings(monkeypatch, openrouter_api_key="sk-or-real")
+        assert embedder_mod._auto_select_provider("openai/text-embedding-3-small") == "openrouter"

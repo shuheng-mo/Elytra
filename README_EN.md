@@ -6,12 +6,13 @@
 
 **LLM-powered intelligent data analysis — natural language in, SQL + visualization out**
 
+[![CI](https://github.com/shuheng-mo/Elytra/actions/workflows/ci.yml/badge.svg)](https://github.com/shuheng-mo/Elytra/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-latest-1c3d5a.svg)](https://github.com/langchain-ai/langgraph)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791.svg)](https://github.com/pgvector/pgvector)
-[![Tests](https://img.shields.io/badge/tests-173%2F173%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-223%2F223%20passing-brightgreen.svg)](#testing)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 [English](README_EN.md) | [简体中文](README.md)
@@ -377,12 +378,34 @@ Elytra/
 All configuration is read from environment variables (`.env` is auto-loaded).
 See [`.env.example`](.env.example) for the full list.
 
-### LLM provider (pick one)
+### LLM provider
+
+Cloud and local backends can be configured simultaneously. Routing priority: **model-name prefix `ollama/*` or `vllm/*` (if the corresponding base URL is set) > OpenRouter > per-vendor fallback**.
 
 | Variable | Notes |
 |:---|:---|
-| `OPENROUTER_API_KEY` | **Recommended.** One key for every model; names must be `vendor/model` |
+| `OPENROUTER_API_KEY` | **Recommended (cloud default).** One key for every chat model; names must be `vendor/model` |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` | Legacy per-vendor keys, only used if `OPENROUTER_API_KEY` is empty |
+| `OLLAMA_BASE_URL` | Local [Ollama](https://ollama.com) (≥ 0.2) endpoint, e.g. `http://localhost:11434`. Activates when a model name starts with `ollama/*` |
+| `VLLM_BASE_URL` | Self-hosted [vLLM](https://github.com/vllm-project/vllm) OpenAI-compatible server URL, e.g. `http://localhost:8000`. Activates when a model name starts with `vllm/*` |
+
+**Local / self-hosted backend examples**:
+
+```bash
+# Ollama — pull the models first
+ollama pull qwen2.5:7b
+ollama pull nomic-embed-text
+# then in .env
+OLLAMA_BASE_URL=http://localhost:11434
+DEFAULT_CHEAP_MODEL=ollama/qwen2.5:7b
+EMBEDDING_MODEL=ollama/nomic-embed-text
+
+# vLLM — launch an OpenAI-compatible server
+python -m vllm.entrypoints.openai.api_server --model meta-llama/Llama-3.1-70B-Instruct
+# then in .env
+VLLM_BASE_URL=http://localhost:8000
+DEFAULT_STRONG_MODEL=vllm/meta-llama/Llama-3.1-70B-Instruct
+```
 
 ### Models
 
@@ -391,14 +414,16 @@ See [`.env.example`](.env.example) for the full list.
 | `DEFAULT_CHEAP_MODEL` | `deepseek/deepseek-chat` | Simple queries / straightforward aggregation |
 | `DEFAULT_STRONG_MODEL` | `anthropic/claude-sonnet-4` | Multi-join / exploration / retry escalation |
 
-### Embeddings (three backends, auto-selected)
+### Embeddings (five backends, auto-selected)
 
 | Variable | Behavior |
 |:---|:---|
 | `EMBEDDING_MODEL=openai/text-embedding-3-large` | Routes through OpenRouter (or direct OpenAI if only that key is set) |
 | `EMBEDDING_MODEL=text-embedding-3-small` | Direct OpenAI |
 | `EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5` | Local sentence-transformers (`pip install -e ".[local-embed]"`) |
-| `EMBEDDING_PROVIDER` | `auto` (default) / `openai` / `openrouter` / `local` |
+| `EMBEDDING_MODEL=ollama/nomic-embed-text` | Ollama local, 768-dim. Requires `OLLAMA_BASE_URL` + `ollama pull nomic-embed-text`. Fully offline |
+| `EMBEDDING_MODEL=vllm/<model_id>` | Self-hosted vLLM. Requires `VLLM_BASE_URL` pointing at a vLLM instance launched with `--model <model_id>` |
+| `EMBEDDING_PROVIDER` | `auto` (default) / `openai` / `openrouter` / `local` / `ollama` / `vllm` |
 | `EMBEDDING_DIM` | `0` = auto-detect from a known-model lookup table |
 
 > **Switching embedding models requires re-running the bootstrap.** pgvector
@@ -727,9 +752,12 @@ Next-phase highlights (v0.7 → v1.0, positioning Elytra in the **Text-to-Analyt
 - [ ] **Public GA release** — Show HN / r/dataengineering / a16z newsletter
 - [ ] **3 real-world case studies** — co-authored with seed users
 
-**v1.1+ candidate pool** (prioritized post-GA based on community feedback, nothing pre-committed): federated cross-source queries (DuckDB as the in-memory federation layer), dbt package integration, VSCode extension, private LLM deployment (vLLM / Ollama), enterprise IAM (LDAP/SSO/Ranger), Multi-Hop query decomposition, tool-use / function-calling agent, row-level security + data masking, K8s Helm chart.
+**Shipped** (v0.6.x infra patch, no hero-feature time budget consumed):
 
-See `Text-to-Analytics赛道研究_Elytra定位分析.md` for the detailed roadmap (per-phase acceptance metrics, file-level change inventory, risk rollback plans, effort allocation).
+- [x] **Private LLM deployment (Ollama / vLLM)** — both chat and embedding support `ollama/*` and `vllm/*` model-name prefix routing
+- [x] **GitHub Actions CI** — ruff lint + full pytest regression on every push / PR, see `.github/workflows/ci.yml`
+
+**v1.1+ candidate pool** (prioritized post-GA based on community feedback, nothing pre-committed): federated cross-source queries (DuckDB as the in-memory federation layer), dbt package integration, VSCode extension, enterprise IAM (LDAP/SSO/Ranger), Multi-Hop query decomposition, tool-use / function-calling agent, row-level security + data masking, K8s Helm chart
 
 ---
 
